@@ -19,13 +19,11 @@ from cegar_loop import (
 
 GoalAllFn = Callable[[np.ndarray], bool]
 
-
 @dataclass
 class Classification:
     verified: Set[int]
     refuted: Set[int]
     unknown: Set[int]
-
 
 def _corners(absys: Abstraction, uid: int) -> np.ndarray:
     r = absys.part.leaves[uid].rect
@@ -261,15 +259,15 @@ def classify_state_space_worklist(
             real_cex += 1
             continue
 
+        if proven:
+            verified.add(u)
+
         # (B) ask abstraction for a counterexample from this single cell
         ce = ctl_get_counterexample_lasso(absys, {u}, merge_actions=True)
         if ce is None:
             # No abstract cex for this init cell.
-            # If proven -> verified; else leave as unknown for now (may be refined later indirectly).
-            if proven:
-                verified.add(u)
-            else:
-                # keep unknown; we may come back later if refinement elsewhere changes things
+            # If not proven, we still don't know: re-check later because refinement elsewhere may help.
+            if not proven:
                 work.append(u)
             continue
 
@@ -283,9 +281,11 @@ def classify_state_space_worklist(
         )
 
         if vr.feasible:
-            # REAL counterexample: mark this init cell as refuted and move on.
+            # REAL counterexample: mark refuted.
             refuted.add(u)
             real_cex += 1
+            # If we had marked it verified because proven, undo that.
+            verified.discard(u)
             continue
 
         # Spurious: refine Clarke-style
@@ -308,8 +308,9 @@ def classify_state_space_worklist(
             if a != absys.OUT_UID:
                 work.append(a)
 
-        # Re-check this cell later; it may now be provable or refutable.
+        # Re-check this cell later; it may now have no abstract cex, or become refutable.
         work.append(u)
+
 
         if verbose_every and (used_steps % verbose_every == 0):
             unknown_now = len([x for x in absys.part.leaves.keys()
