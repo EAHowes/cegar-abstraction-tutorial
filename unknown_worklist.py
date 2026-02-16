@@ -108,6 +108,40 @@ def prove_cell_by_corners(
     return False
 
 
+def refute_cell_by_corners(
+    absys: Abstraction,
+    uid: int,
+    *,
+    max_steps: int = 100,
+) -> bool:
+    """
+    Sound trivial refutation:
+
+    If ANY concrete trajectory from this cell (we use 4 corners)
+    leaves the domain within <= max_steps, then we have a real
+    counterexample → cell is REFUTED.
+
+    This is sound because it constructs an explicit bad trajectory.
+    """
+    dyn = absys.dyn_by_action["step"]
+    domain = absys.part.domain
+    pts = _corners(absys, uid)
+
+    # Already out of bounds
+    for p in pts:
+        if not domain.contains_point(float(p[0]), float(p[1])):
+            return True
+
+    for _ in range(max_steps):
+        pts = np.array([dyn.dynamics(p) for p in pts], dtype=float)
+
+        for p in pts:
+            if not domain.contains_point(float(p[0]), float(p[1])):
+                return True
+
+    return False
+
+
 def effective_verified_for_plot(absys: Abstraction, verified: Set[int]) -> Set[int]:
     """Plotting-only: a current leaf is green if it OR any ancestor was verified."""
     eff: Set[int] = set()
@@ -220,6 +254,12 @@ def classify_state_space_worklist(
 
         # (A) try to PROVE (sufficient proof rule)
         proven = prove_cell_by_corners(absys, u, goal_all_fn, max_steps=max_steps_validator)
+
+        # (A0) trivial REFUTE check (fast concrete falsification)
+        if refute_cell_by_corners(absys, u, max_steps=max_steps_validator):
+            refuted.add(u)
+            real_cex += 1
+            continue
 
         # (B) ask abstraction for a counterexample from this single cell
         ce = ctl_get_counterexample_lasso(absys, {u}, merge_actions=True)
