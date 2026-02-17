@@ -1,0 +1,18 @@
+
+[RUNNING CEGAR BUILD]
+
+[GROUND TRUTH COMPARISON]
+
+========== FINAL METRICS ==========
+X hat:             11500
+Build time:        5798.315s
+Verification time: 3.337s
+TPR:               0.9861
+FNR:               0.0139
+SR:                0.9807
+
+Verified states:   6890
+Refuted states:    3382
+Unknown states:    1294
+===================================
+
