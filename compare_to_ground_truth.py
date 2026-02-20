@@ -153,6 +153,10 @@ def self_loop_proportion_s(transition_map) -> float:
     n_states = len(transition_map)
     return self_loops / n_states if n_states > 0 else 0.0
 
+def mean_successor_count_mSucc(transition_map) -> float:
+    # mSucc = (1/|X|) * sum_x |Succ(x)|
+    n_states = len(transition_map)
+    return (sum(len(succ) for succ in transition_map) / n_states) if n_states > 0 else 0.0
 # --------------------------------------------------
 # main
 # --------------------------------------------------
@@ -194,6 +198,8 @@ def main():
     _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke()
     s = self_loop_proportion_s(transition_map)
 
+    mSucc = mean_successor_count_mSucc(transition_map[:-1])
+
     n_states = len(transition_map) - 1
 
     # ---- metrics ----
@@ -209,6 +215,7 @@ def main():
     print(f"FNR:               {fnr:.4f}")
     print(f"SR:                {sr:.4f}")
     print(f"Self-loop proportion (s): {s:.4f}")
+    print(f"mSucc:                {mSucc:.4f}")
     print("===================================\n")
 
 
