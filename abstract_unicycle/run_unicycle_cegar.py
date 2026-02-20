@@ -99,7 +99,10 @@ def compute_sat_coverage_from_boxes(sat_uids, part: Partition3D) -> float:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", choices=["aabb","poly"], default="aabb", help="Global transition method for the entire run.")
+    ap.add_argument("--init-method", choices=["aabb","poly"], default="aabb",
+                help="Method used to build the initial abstraction transitions.")
+    ap.add_argument("--refine-method", choices=["aabb"], default="aabb",
+                help="Method used for transitions created during refinement (splits).")
     ap.add_argument("--nx", type=int, default=20)
     ap.add_argument("--ny", type=int, default=20)
     ap.add_argument("--nz", type=int, default=20)
@@ -132,10 +135,12 @@ def main():
     absys = UnicycleAbstraction(
         part=part,
         dyn=dyn,
-        method=args.method,
+        init_method=args.init_method,
+        refine_method=args.refine_method,
         allow_self_loops=True,
         bins=(args.nx, args.ny, args.nz),
     )
+
     absys.rebuild_all(labeler, verbose=args.verbose)
 
     init_uids = {u for u in absys.part.leaves.keys() if "unsafe" not in labeler(absys.part.get_box(u))}
@@ -222,7 +227,8 @@ def main():
     slp = float(self_loops/len(leaves)) if leaves else 0.0
 
     metrics = {
-        "method": args.method,
+        "init_method": args.init_method,
+        "refine_method": args.refine_method,
         "nx": args.nx, "ny": args.ny, "nz": args.nz,
         "horizon": args.horizon,
         "split_budget": args.split_budget,
@@ -251,7 +257,8 @@ def main():
         json.dump(metrics, f, indent=2)
 
     print("\n==================== RESULTS ====================")
-    print(f"Method: {args.method.upper()}")
+    print(f"Init method: {args.init_method.upper()}")
+    print(f"Refine method: {args.refine_method.upper()}")
     print(f"Grid: nx={args.nx}, ny={args.ny}, nz={args.nz}  (|X_hat|={len(leaves)})")
     print(f"Horizon: {args.horizon}")
     print(f"Split budget: {args.split_budget}   Max iters: {args.max_iters}")
