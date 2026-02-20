@@ -1,14 +1,17 @@
 import time
 import argparse
 import numpy as np
+import sys
 
 from unknown_worklist import classify_state_space_worklist
 from krish_abstraction import KrishAbstraction
 from abstraction import Rect, RectPartition
 from helpers.systems.synthetic import SyntheticSystem
-from helpers.model_checking_tools import SyntheticModelChecker
+
+from helpers.model_checking_tools import SyntheticModelChecker, MountainCarModelChecker
 from helpers.ground_truth_cache import build_gt_cache_path, load_gt_cache, save_gt_cache
 
+sys.setrecursionlimit(200_000)
 
 def uniform_grid_cells(domain: Rect, resolution: int) -> np.ndarray:
     """
@@ -41,53 +44,51 @@ def find_leaf_uid(absys, x, y):
 # --------------------------------------------------
 # build abstraction + run classification
 # --------------------------------------------------
-def run_cegar(nx, ny, budget):
-    domain = Rect(-10.0, 10.0, -10.0, 10.0)
-    part = RectPartition.uniform_grid(domain, nx, ny)
-    system = SyntheticSystem()
-    absys = KrishAbstraction(part=part, system=system, method="POLY")
+import importlib
 
-    def goal_all_fn(points):
-        center = np.array([5.0, 5.0])
-        r2 = 2.0 ** 2
-        d = points - center[None, :]
-        return bool(np.all(np.sum(d * d, axis=1) <= r2))
+def run_cegar(system_mod: str, nx: int, ny: int, budget: int, method: str, max_steps: int):
+    mod = importlib.import_module(system_mod)
+    spec = mod.build(nx=nx, ny=ny, method=method)
 
-    phi = "A (safe U goal)"
+    absys = spec["absys"]
+    phi = spec["phi"]
+    goal_all_fn = spec["goal_all_fn"]
 
-    # ---- BUILD TIMER START ----
-    t0 = time.process_time()
-
+    t0 = time.perf_counter()
     cls, stats = classify_state_space_worklist(
         absys,
         phi,
         goal_all_fn=goal_all_fn,
         budget_steps=budget,
+        max_steps_validator=max_steps,
     )
+    build_time = time.perf_counter() - t0
+    return absys, cls, build_time, stats, spec
 
-    build_time = time.process_time() - t0
-    # ---- BUILD TIMER END ----
-
-    return absys, cls, build_time
-
+def pick_checker(case_study: str):
+    cs = (case_study or "").lower()
+    if "mountain" in cs:
+        return MountainCarModelChecker
+    if "unicycle" in cs:
+        return UnicycleModelChecker
+    return SyntheticModelChecker
 
 # --------------------------------------------------
 # compute ground truth using Krish code
 # --------------------------------------------------
-def compute_ground_truth(absys, resolution, max_steps, cache_dir="gt_cache"):
-    checker = SyntheticModelChecker(absys.system)
+def compute_ground_truth(absys, case_study: str, resolution: int, max_steps: int, *, cache_dir="gt_cache"):
+    Checker = pick_checker(case_study)
+    checker = Checker(absys.system)
+
     d = absys.part.domain
     domain_arr = np.array([d.xmin, d.xmax, d.ymin, d.ymax], dtype=float)
 
-    # Build a Krish-style cache key
-    system_name = type(absys.system).__name__
     cfg = {
         "domain": [d.xmin, d.xmax, d.ymin, d.ymax],
         "gt_grid_resolution": int(resolution),
         "gt_max_steps": int(max_steps),
     }
-
-    cache_path = build_gt_cache_path(cache_dir, system_name, cfg)
+    cache_path = build_gt_cache_path(cache_dir, case_study, cfg)
 
     if cache_path.exists():
         return load_gt_cache(cache_path)
@@ -100,14 +101,19 @@ def compute_ground_truth(absys, resolution, max_steps, cache_dir="gt_cache"):
 # --------------------------------------------------
 # compare classification vs ground truth
 # --------------------------------------------------
-def evaluate(absys, cls, gt_resolution, gt_max_steps):
-    checker = SyntheticModelChecker(absys.system)
+def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
+    Checker = pick_checker(spec.get("case_study", "synthetic"))
+    checker = Checker(absys.system)
+
+    # checker = SyntheticModelChecker(absys.system)
     d = absys.part.domain
     domain_arr = np.array([d.xmin, d.xmax, d.ymin, d.ymax], dtype=float)
 
     # --- ground truth ---
     t0 = time.process_time()
-    gt_regions = compute_ground_truth(absys, gt_resolution, gt_max_steps)
+    # gt_regions = compute_ground_truth(absys, gt_resolution, gt_max_steps)
+    case_study = spec.get("case_study", "synthetic")
+    gt_regions = compute_ground_truth(absys, case_study, gt_resolution, gt_max_steps)
 
     # uniform grid used by Krish
     cells = uniform_grid_cells(d, gt_resolution)
@@ -141,12 +147,22 @@ def evaluate(absys, cls, gt_resolution, gt_max_steps):
     verify_time = time.process_time() - t0
     return results, verify_time
 
+def self_loop_proportion_s(transition_map) -> float:
+    # EXACT implementation from log_utils.py
+    self_loops = sum(1 for i, succ in enumerate(transition_map) if i in succ)
+    n_states = len(transition_map)
+    return self_loops / n_states if n_states > 0 else 0.0
 
 # --------------------------------------------------
 # main
 # --------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--system", type=str, default="helpers.systems.synthetic",
+                    help="Python module path with build(nx, ny, method=...)")
+    parser.add_argument("--method", type=str, default="POLY", choices=["POLY", "AABB"])
+    parser.add_argument("--max_steps", type=int, default=100)
+
     parser.add_argument("--nx", type=int, default=40)
     parser.add_argument("--ny", type=int, default=40)
     parser.add_argument("--budget", type=int, default=10000)
@@ -155,15 +171,30 @@ def main():
     args = parser.parse_args()
 
     print("\n[RUNNING CEGAR BUILD]")
-    absys, cls, build_time = run_cegar(args.nx, args.ny, args.budget)
+    absys, cls, build_time, stats, spec = run_cegar(
+        args.system,
+        args.nx,
+        args.ny,
+        args.budget,
+        args.method,
+        args.max_steps,
+    )
+
 
     print("\n[GROUND TRUTH COMPARISON]")
     results, verify_time = evaluate(
         absys,
         cls,
+        spec,
         args.gt_grid_resolution,
         args.gt_max_steps,
     )
+
+    # Build kripke once and reuse its transition_map (do NOT rebuild transitions)
+    _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke()
+    s = self_loop_proportion_s(transition_map)
+
+    n_states = len(transition_map) - 1
 
     # ---- metrics ----
     fnr = results["fnr"]
@@ -173,9 +204,11 @@ def main():
     print("\n========== FINAL METRICS ==========")
     print(f"Build time:        {build_time:.3f}s")
     print(f"Verification time: {verify_time:.3f}s")
+    print(f"X hat:               {n_states}")
     print(f"TPR:               {tpr:.4f}")
     print(f"FNR:               {fnr:.4f}")
     print(f"SR:                {sr:.4f}")
+    print(f"Self-loop proportion (s): {s:.4f}")
     print("===================================\n")
 
 
