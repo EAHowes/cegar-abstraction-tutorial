@@ -9,7 +9,7 @@ from unicycle_partition_3d import Box3D, wrap_to_pi, theta_min_arc_intervals
 @dataclass
 class UnicycleParams:
     dt: float = 0.5
-    v: float = 5.0
+    v: float = 1.0
     omega_max: float = np.pi/4
     p_bounds: Tuple[float,float] = (0.0, 50.0)
     q_bounds: Tuple[float,float] = (0.0, 40.0)
