@@ -87,7 +87,14 @@ def main():
         obs_radius=OBS_RADIUS,
     ))
 
-    absys = UnicycleAbstraction(part=part, dyn=dyn, method=args.method, allow_self_loops=True)
+    # Spatial hash bins: tie to initial resolution for good locality.
+    absys = UnicycleAbstraction(
+        part=part,
+        dyn=dyn,
+        method=args.method,
+        allow_self_loops=True,
+        bins=(args.nx, args.ny, args.nz),
+    )
     absys.rebuild_all(labeler, verbose=args.verbose)
 
     init_uids = {u for u in absys.part.leaves.keys() if "unsafe" not in labeler(absys.part.get_box(u))}

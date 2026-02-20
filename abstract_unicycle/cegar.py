@@ -16,31 +16,64 @@ class CegarResult:
     iters: int
     last_cex: List[int]
 
+def _pack_successors(succ_list: List[np.ndarray]) -> np.ndarray:
+    """Pack ragged successor lists into a dense int64 matrix with padding."""
+    n = len(succ_list)
+    max_deg = 0
+    for s in succ_list:
+        if s.size > max_deg:
+            max_deg = int(s.size)
+    if max_deg == 0:
+        return np.zeros((n, 0), dtype=np.int64)
+    pad_idx = n
+    mat = np.full((n, max_deg), pad_idx, dtype=np.int64)
+    for i, s in enumerate(succ_list):
+        if s.size:
+            mat[i, : s.size] = s
+    return mat
+
+
 def bounded_A_safe_U_goal(
     uids: List[int],
     succ_list: List[np.ndarray],
     is_goal: np.ndarray,
     is_safe: np.ndarray,
-    horizon: int
-) -> np.ndarray:
-    """
+    horizon: int,
+    *,
+    return_layers: bool = False,
+) -> np.ndarray | Tuple[np.ndarray, List[np.ndarray]]:
+    """\
     Compute sat set for A(safe U goal) within bounded horizon.
-    sat[t] = goal OR (safe AND AX(sat[t-1]))
+
+    Semantics (unchanged):
+      sat_0 = goal
+      sat_{t+1} = goal OR (safe AND AX(sat_t))
+    where AX(phi) means: all successors satisfy phi.
+
+    This implementation is vectorized over states using a packed successor matrix.
     """
     n = len(uids)
     sat = is_goal.copy()
-    # precompute for AX: for each state, list of successors indices
+    layers: List[np.ndarray] = [sat.copy()] if return_layers else []
+
+    succ_mat = _pack_successors(succ_list)
+    max_deg = succ_mat.shape[1]
+
+    if max_deg == 0:
+        for _ in range(horizon):
+            sat = is_goal | is_safe
+            if return_layers:
+                layers.append(sat.copy())
+        return (sat, layers) if return_layers else sat
+
     for _ in range(horizon):
-        # compute AX(sat): for each state, all successors in sat
-        ax = np.ones(n, dtype=bool)
-        for i in range(n):
-            succ = succ_list[i]
-            if succ.size == 0:
-                ax[i] = True
-            else:
-                ax[i] = bool(np.all(sat[succ]))
+        # Append sentinel True for padding index.
+        sat_pad = np.concatenate([sat, np.array([True], dtype=bool)])
+        ax = np.all(sat_pad[succ_mat], axis=1)
         sat = is_goal | (is_safe & ax)
-    return sat
+        if return_layers:
+            layers.append(sat.copy())
+    return (sat, layers) if return_layers else sat
 
 def extract_counterexample(
     uids: List[int],
@@ -70,18 +103,10 @@ def extract_counterexample(
 
     path = [start_uid]
     cur = start_uid
-    # Recompute sat layers backwards for extraction (cheap for small horizons)
-    layers = []
-    sat_prev = is_goal.copy()
-    layers.append(sat_prev)
-    for _ in range(horizon):
-        ax = np.ones(len(uids), dtype=bool)
-        for i in range(len(uids)):
-            succ = succ_list[i]
-            if succ.size:
-                ax[i] = bool(np.all(sat_prev[succ]))
-        sat_prev = is_goal | (is_safe & ax)
-        layers.append(sat_prev)
+    # Compute sat layers once (vectorized) for extraction.
+    _, layers = bounded_A_safe_U_goal(
+        uids, succ_list, is_goal, is_safe, horizon, return_layers=True
+    )
 
     # layers[t] is sat after t iterations; final is layers[horizon]
     # We want to follow a witness for violation of layers[horizon]

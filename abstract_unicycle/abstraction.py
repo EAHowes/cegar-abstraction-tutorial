@@ -6,7 +6,13 @@ import numpy as np
 
 from unicycle_partition_3d import Box3D, Partition3D
 from unicycle_dyn import UnicycleClosedLoop
-from helpers.math_utils import prepare_convex_hull_lp, convex_hull_intersects_box
+from helpers.math_utils import (
+    unwrap_theta_interval_options,
+    prepare_convex_hull_lp,
+    convex_hull_intersects_box,
+)
+
+from spatial_index import SpatialHash3D
 
 Method = Literal["aabb","poly"]
 
@@ -44,13 +50,33 @@ class UnicycleAbstraction:
     """
     OUT_UID = -1
 
-    def __init__(self, part: Partition3D, dyn: UnicycleClosedLoop, *, method: Method = "aabb", allow_self_loops: bool = True, tol: float = 1e-9):
+    def __init__(
+        self,
+        part: Partition3D,
+        dyn: UnicycleClosedLoop,
+        *,
+        method: Method = "aabb",
+        allow_self_loops: bool = True,
+        tol: float = 1e-9,
+        bins: Tuple[int, int, int] = (40, 32, 40),
+    ):
         self.part = part
         self.dyn = dyn
         self.method: Method = method
         self.allow_self_loops = bool(allow_self_loops)
         self.tol = float(tol)
         self.tr = TransitionGraph()
+
+        # Candidate filtering over current leaf AABBs.
+        root = self.part.get_box(self.part.root_uid)
+        self._index = SpatialHash3D(
+            root.p_lo, root.p_hi,
+            root.q_lo, root.q_hi,
+            root.th_lo, root.th_hi,
+            nb_p=int(bins[0]),
+            nb_q=int(bins[1]),
+            nb_th=int(bins[2]),
+        )
         # Cache per-leaf one-step image info so that after a split we can update
         # predecessor transitions without recomputing their images.
         # uid -> dict with keys: img_boxes, hits_oob, verts, theta_arc_start, lp
@@ -64,6 +90,8 @@ class UnicycleAbstraction:
         self.ap_labels = labeler
         self.tr = TransitionGraph()
         self._img_cache = {}
+        # rebuild spatial index over leaves
+        self._index.bulk_build((u, self.part.get_box(u)) for u in self.part.leaves.keys())
         leaves = list(self.part.leaves.keys())
         if verbose:
             print(f"[abs] rebuilding transitions for {len(leaves)} leaves ({self.method})...")
@@ -109,39 +137,46 @@ class UnicycleAbstraction:
             "theta_arc_start": float(theta_arc_start_u),
         }
 
-        # candidate successors via AABB queries
+        # Candidate successors via spatial hash (superset), then exact AABB check.
         cand: Set[int] = set()
         for ib in img_boxes:
-            cand |= self.part.query_intersecting_leaves(ib)
+            for v in self._index.query_candidates(ib):
+                if v in self.part.leaves and self.part.get_box(v).intersects(ib):
+                    cand.add(v)
 
         succs: Set[int] = set()
         if self.method == "aabb":
             succs = cand
         else:
-            # exact convex hull intersection test against each candidate leaf box
-            # unwrap theta coordinates into a contiguous arc frame starting at theta_arc_start_u
-            verts = next_verts.copy()
-            # map theta to [0,2pi), then unwrap
+            # POLY: exact convex hull intersection test against candidate leaf boxes.
+            # Unwrap vertices into the minimal arc frame determined by theta_arc_start_u
+            # (matching Krish's theta handling).
+            verts = np.asarray(next_verts, dtype=float).copy()
             theta_lo = -np.pi
-            period = 2*np.pi
-            uvals = np.mod(verts[:,2] - theta_lo, period)
+            theta_hi = np.pi
+            period = 2.0 * np.pi
+            uvals = np.mod(verts[:, 2] - theta_lo, period)
             uvals = np.where(uvals < theta_arc_start_u, uvals + period, uvals)
-            verts[:,2] = theta_lo + uvals
+            verts[:, 2] = theta_lo + uvals
             lp = prepare_convex_hull_lp(verts)
             info["verts"] = verts
             info["lp"] = lp
 
             for v in cand:
                 b = self.part.get_box(v)
-                bmin = np.array([b.p_lo, b.q_lo, b.th_lo], dtype=float)
-                bmax = np.array([b.p_hi, b.q_hi, b.th_hi], dtype=float)
-                # If theta interval is "low" and our verts are unwrapped above pi, also lift box by +2pi when needed
-                # We'll test both placements for safety.
-                ok = convex_hull_intersects_box(bmin, bmax, lp, tol=self.tol)
-                if not ok:
-                    bmin2 = bmin.copy(); bmax2 = bmax.copy()
-                    bmin2[2] += period; bmax2[2] += period
-                    ok = convex_hull_intersects_box(bmin2, bmax2, lp, tol=self.tol)
+                # Unwrap target theta interval into the same frame as verts.
+                opts = unwrap_theta_interval_options(
+                    b.th_lo, b.th_hi,
+                    theta_lo, theta_hi,
+                    arc_start_u=float(theta_arc_start_u),
+                )
+                ok = False
+                for (tlo_u, thi_u) in opts:
+                    bmin = np.array([b.p_lo, b.q_lo, tlo_u], dtype=float)
+                    bmax = np.array([b.p_hi, b.q_hi, thi_u], dtype=float)
+                    if convex_hull_intersects_box(bmin, bmax, lp, tol=self.tol):
+                        ok = True
+                        break
                 if ok:
                     succs.add(v)
 
@@ -166,6 +201,11 @@ class UnicycleAbstraction:
         kids = self.part.refine_oct(uid)
         if not kids:
             return []
+
+        # update spatial index: remove parent leaf, add children
+        self._index.remove(uid)
+        for k in kids:
+            self._index.insert(k, self.part.get_box(k))
 
         # Remove uid from cache and outgoing map (uid becomes internal).
         self._img_cache.pop(uid, None)
@@ -207,7 +247,10 @@ class UnicycleAbstraction:
                 if lp is None:
                     self._rebuild_outgoing(p)
                     continue
-                period = 2*np.pi
+                theta_lo = -np.pi
+                theta_hi = np.pi
+                period = 2.0 * np.pi
+                arc_start_u = float(info.get("theta_arc_start", 0.0))
                 for k, kb in kid_boxes.items():
                     # AABB quick reject
                     ok_aabb = False
@@ -217,13 +260,18 @@ class UnicycleAbstraction:
                             break
                     if not ok_aabb:
                         continue
-                    bmin = np.array([kb.p_lo, kb.q_lo, kb.th_lo], dtype=float)
-                    bmax = np.array([kb.p_hi, kb.q_hi, kb.th_hi], dtype=float)
-                    ok = convex_hull_intersects_box(bmin, bmax, lp, tol=self.tol)
-                    if not ok:
-                        bmin2 = bmin.copy(); bmax2 = bmax.copy()
-                        bmin2[2] += period; bmax2[2] += period
-                        ok = convex_hull_intersects_box(bmin2, bmax2, lp, tol=self.tol)
+                    opts = unwrap_theta_interval_options(
+                        kb.th_lo, kb.th_hi,
+                        theta_lo, theta_hi,
+                        arc_start_u=arc_start_u,
+                    )
+                    ok = False
+                    for (tlo_u, thi_u) in opts:
+                        bmin = np.array([kb.p_lo, kb.q_lo, tlo_u], dtype=float)
+                        bmax = np.array([kb.p_hi, kb.q_hi, thi_u], dtype=float)
+                        if convex_hull_intersects_box(bmin, bmax, lp, tol=self.tol):
+                            ok = True
+                            break
                     if ok:
                         succs.add(k)
 
