@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple, Literal
@@ -14,7 +13,8 @@ from helpers.math_utils import (
 
 from spatial_index import SpatialHash3D
 
-Method = Literal["aabb","poly"]
+Method = Literal["aabb", "poly"]
+
 
 @dataclass
 class TransitionGraph:
@@ -41,11 +41,17 @@ class TransitionGraph:
     def predecessors(self, u: int) -> Set[int]:
         return set(self.pred.get(u, set()))
 
+
 class UnicycleAbstraction:
     """
     Adaptive partition abstraction over Partition3D leaves.
-    Supports two global transition construction modes for the entire run:
-      - AABB: successor if target leaf intersects the image AABB box (with theta wrap handled via split boxes)
+
+    HYBRID SUPPORT:
+      - init_method controls how initial transitions are built in rebuild_all()
+      - refine_method controls how transitions are built for NEW children after splits
+
+    Method semantics (unchanged):
+      - AABB: successor if target leaf intersects the image AABB box (theta wrap handled via img_boxes)
       - POLY: candidate targets from AABB, then exact convex hull vs box feasibility test
     """
     OUT_UID = -1
@@ -55,14 +61,29 @@ class UnicycleAbstraction:
         part: Partition3D,
         dyn: UnicycleClosedLoop,
         *,
-        method: Method = "aabb",
+        init_method: Method = "aabb",
+        refine_method: Method = "aabb",
         allow_self_loops: bool = True,
         tol: float = 1e-9,
         bins: Tuple[int, int, int] = (40, 32, 40),
+        # Backward-compat: allow old code to pass method=...
+        method: Optional[Method] = None,
     ):
         self.part = part
         self.dyn = dyn
-        self.method: Method = method
+
+        if method is not None:
+            init_method = method
+            refine_method = method
+
+        self.init_method: Method = init_method
+        self.refine_method: Method = refine_method
+
+        # Per-leaf transition method tag:
+        # - all leaves start with init_method
+        # - all newly created refined children get refine_method
+        self.leaf_method: Dict[int, Method] = {}
+
         self.allow_self_loops = bool(allow_self_loops)
         self.tol = float(tol)
         self.tr = TransitionGraph()
@@ -77,48 +98,41 @@ class UnicycleAbstraction:
             nb_q=int(bins[1]),
             nb_th=int(bins[2]),
         )
+
         # Cache per-leaf one-step image info so that after a split we can update
-        # predecessor transitions without recomputing their images.
-        # uid -> dict with keys: img_boxes, hits_oob, verts, theta_arc_start, lp
+        # predecessor transitions without recomputing predecessor images.
         self._img_cache: Dict[int, Dict[str, object]] = {}
 
-    def ap_labels(self, box: Optional[Box3D]) -> List[str]:
-        # used by runner for goal/unsafe; defined in run script for this case study
-        raise NotImplementedError("set labeler externally")
+    def rebuild_all(self, ap_labeler, verbose: bool = False) -> None:
+        """
+        Build the transition graph for all current leaves using init_method.
+        """
+        # rebuild spatial index from scratch
+        self._index.clear()
+        for u in self.part.leaves.keys():
+            self._index.insert(u, self.part.get_box(u))
 
-    def rebuild_all(self, labeler, *, verbose: bool = False) -> None:
-        self.ap_labels = labeler
-        self.tr = TransitionGraph()
+        # tag all leaves with init_method
+        self.leaf_method = {u: self.init_method for u in self.part.leaves.keys()}
+
+        # reset caches + transitions
         self._img_cache = {}
-        # rebuild spatial index over leaves
-        self._index.bulk_build((u, self.part.get_box(u)) for u in self.part.leaves.keys())
-        leaves = list(self.part.leaves.keys())
-        if verbose:
-            print(f"[abs] rebuilding transitions for {len(leaves)} leaves ({self.method})...")
-        for idx,u in enumerate(leaves):
-            self._rebuild_outgoing(u)
-            if verbose and idx>0 and idx % 5000 == 0:
-                print(f"  done {idx}/{len(leaves)}")
-        # OUT self-loop
+        self.tr = TransitionGraph()
+
+        # OUT state self-loop
         self.tr.set_succ(self.OUT_UID, {self.OUT_UID})
 
-    def rebuild_after_split(self, refined_uid: int) -> None:
-        """
-        After splitting a leaf uid into children, update transitions incrementally:
-          - refined_uid is no longer a leaf; remove its outgoing
-          - rebuild outgoing for each new child
-          - rebuild outgoing for each predecessor that used to point to refined_uid (since refined_uid disappeared)
-        """
-        # predecessors that may target refined_uid
-        preds = self.tr.predecessors(refined_uid)
-        # remove refined_uid mapping if present
-        self.tr.set_succ(refined_uid, set())
-        # rebuild outgoing for new children (all current leaves under refined_uid)
-        # We do not have a direct mapping; simplest: rebuild outgoing for children just created by Partition3D.refine_oct return value at call site.
-        for p in preds:
-            self._rebuild_outgoing(p)
+        leaves = list(self.part.leaves.keys())
+        if verbose:
+            print(f"[abs] rebuild_all: {len(leaves)} leaves (init={self.init_method}, refine={self.refine_method})")
+
+        for u in leaves:
+            self._rebuild_outgoing(u)
 
     def _rebuild_outgoing(self, u: int) -> None:
+        """
+        Rebuild outgoing transitions for leaf u using the per-leaf method tag.
+        """
         if u == self.OUT_UID:
             self.tr.set_succ(u, {self.OUT_UID})
             return
@@ -126,6 +140,9 @@ class UnicycleAbstraction:
             # internal node; no outgoing
             self.tr.set_succ(u, set())
             return
+
+        # Determine method for this leaf
+        m: Method = self.leaf_method.get(u, self.init_method)
 
         box_u = self.part.get_box(u)
         next_verts, img_boxes, hits_oob, theta_arc_start_u = self.dyn.image_from_box(box_u)
@@ -135,6 +152,7 @@ class UnicycleAbstraction:
             "img_boxes": img_boxes,
             "hits_oob": bool(hits_oob),
             "theta_arc_start": float(theta_arc_start_u),
+            "method": m,
         }
 
         # Candidate successors via spatial hash (superset), then exact AABB check.
@@ -145,7 +163,7 @@ class UnicycleAbstraction:
                     cand.add(v)
 
         succs: Set[int] = set()
-        if self.method == "aabb":
+        if m == "aabb":
             succs = cand
         else:
             # POLY: exact convex hull intersection test against candidate leaf boxes.
@@ -196,6 +214,10 @@ class UnicycleAbstraction:
     def refine_split(self, uid: int) -> List[int]:
         """
         Split the given leaf into 8 children (oct split). Returns new child uids.
+
+        HYBRID semantics:
+          - children get refine_method
+          - predecessor repair uses each predecessor's own method tag (from leaf_method)
         """
         # Split leaf into children.
         kids = self.part.refine_oct(uid)
@@ -211,8 +233,14 @@ class UnicycleAbstraction:
         self._img_cache.pop(uid, None)
         self.tr.set_succ(uid, set())
 
-        # Build outgoing transitions for each new child (this is the only place
-        # we recompute images after a split).
+        # Parent is no longer a leaf; remove its method tag
+        self.leaf_method.pop(uid, None)
+
+        # Tag children with refine_method
+        for k in kids:
+            self.leaf_method[k] = self.refine_method
+
+        # Build outgoing transitions for each new child (only place we recompute images after a split).
         for k in kids:
             self._rebuild_outgoing(k)
 
@@ -236,7 +264,10 @@ class UnicycleAbstraction:
 
             img_boxes = info["img_boxes"]
 
-            if self.method == "aabb":
+            # Use predecessor's own method tag (hybrid semantics)
+            pm: Method = self.leaf_method.get(p, self.init_method)
+
+            if pm == "aabb":
                 for k, kb in kid_boxes.items():
                     for ib in img_boxes:
                         if kb.intersects(ib):
@@ -249,8 +280,8 @@ class UnicycleAbstraction:
                     continue
                 theta_lo = -np.pi
                 theta_hi = np.pi
-                period = 2.0 * np.pi
                 arc_start_u = float(info.get("theta_arc_start", 0.0))
+
                 for k, kb in kid_boxes.items():
                     # AABB quick reject
                     ok_aabb = False
@@ -260,6 +291,7 @@ class UnicycleAbstraction:
                             break
                     if not ok_aabb:
                         continue
+
                     opts = unwrap_theta_interval_options(
                         kb.th_lo, kb.th_hi,
                         theta_lo, theta_hi,
