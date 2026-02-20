@@ -48,6 +48,47 @@ def load_gt_map(path: str) -> dict:
     with open(path, "rb") as f:
         return pickle.load(f)
 
+def build_gt_goal_array_from_pkl(gt: dict) -> np.ndarray:
+    """
+    GT cache is a dict mapping (i,j,k) -> label in {'goal','fail','unk'}.
+    For this particular cache: labels are {'goal','fail'}.
+    Returns goal_mask with shape (n,n,n) where n=99 for grid_res=100.
+    """
+    n = int(round(len(gt) ** (1.0 / 3.0)))
+    if n**3 != len(gt):
+        raise ValueError(f"GT cache size {len(gt)} is not a perfect cube.")
+    goal_mask = np.zeros((n, n, n), dtype=bool)
+    for (i, j, k), lab in gt.items():
+        goal_mask[i, j, k] = (lab == "goal")
+    return goal_mask
+
+def idx_range_uniform(lo: float, hi: float, lo_dom: float, hi_dom: float, n: int):
+    """
+    Convert real interval [lo,hi] into index range [a,b) over n uniform cells.
+    n is number of cells per axis (here 99). Clamps to [0,n].
+    """
+    if hi <= lo:
+        return 0, 0
+    # map domain to [0,n)
+    a = int(np.floor((lo - lo_dom) / (hi_dom - lo_dom) * n))
+    b = int(np.ceil((hi - lo_dom) / (hi_dom - lo_dom) * n))
+    return max(0, a), min(n, b)
+
+def box_true_goal_under_gt_mask(box: Box3D, goal_mask: np.ndarray) -> bool:
+    """
+    Implements the subset indicator in Eq. (35)/(36):
+    returns True iff every GT microcell overlapping this abstract box is 'goal'.
+    """
+    n = goal_mask.shape[0]  # 99
+    i0, i1 = idx_range_uniform(box.p_lo, box.p_hi, P_MIN, P_MAX, n)
+    j0, j1 = idx_range_uniform(box.q_lo, box.q_hi, Q_MIN, Q_MAX, n)
+    k0, k1 = idx_range_uniform(box.th_lo, box.th_hi, TH_MIN, TH_MAX, n)
+
+    if i0 >= i1 or j0 >= j1 or k0 >= k1:
+        return False
+
+    return bool(np.all(goal_mask[i0:i1, j0:j1, k0:k1]))
+
 def compute_sat_coverage_from_boxes(sat_uids, part: Partition3D) -> float:
     total_vol = (P_MAX-P_MIN)*(Q_MAX-Q_MIN)*(TH_MAX-TH_MIN)
     sat_vol = 0.0
@@ -116,47 +157,56 @@ def main():
     with open(class_path, "wb") as f:
         pickle.dump(res.classification, f)
 
-    # Metrics vs GT cache
+    # Metrics vs GT cache (Paper definitions Eq. 35 and Eq. 36)
     t1 = time.process_time()
     gt = load_gt_map(args.gt_cache)
-    # GT coverage (goal regions only)
-    gt_goal = sum(1 for v in gt.values() if v == "goal")
-    gt_coverage = gt_goal / len(gt) if len(gt) else float("nan")
 
-    # sat coverage (volume)
-    sat_coverage = compute_sat_coverage_from_boxes(res.sat_uids, absys.part)
-    sr = (sat_coverage / gt_coverage) if (gt_coverage and gt_coverage > 0) else float("nan")
+    # Build boolean goal mask for fast subset checks
+    goal_mask = build_gt_goal_array_from_pkl(gt)
+    n_gt = goal_mask.shape[0]  # should be 99 for grid_res=100
+    grid_res = n_gt + 1        # 100
 
-    # For TPR/FNR we need true_goal at leaf level. We'll conservatively mark a leaf as true_goal if ALL GT voxels it covers are goal.
-    # We'll reuse the helper in gt_helper_functions if available; else do containment sampling on GT grid by index ranges.
-    # To keep repo self-contained, compute using index-range containment against GT grid.
-    grid_res = 100
-    n = grid_res - 1
-    # precompute GT goal boolean array lazily not stored due to size; use dict lookup in ranges.
-    def box_true_goal_under_gt(box: Box3D) -> bool:
-        # map to GT indices
-        def idx_range(lo, hi, lo_dom, hi_dom):
-            # convert to [0,n) cells; clamp
-            a = int(np.floor((lo - lo_dom) / (hi_dom - lo_dom) * n))
-            b = int(np.ceil((hi - lo_dom) / (hi_dom - lo_dom) * n))
-            return max(0,a), min(n,b)
-        i0,i1 = idx_range(box.p_lo, box.p_hi, P_MIN, P_MAX)
-        j0,j1 = idx_range(box.q_lo, box.q_hi, Q_MIN, Q_MAX)
-        k0,k1 = idx_range(box.th_lo, box.th_hi, TH_MIN, TH_MAX)
-        for i in range(i0,i1):
-            for j in range(j0,j1):
-                for k in range(k0,k1):
-                    if gt.get((i,j,k)) != "goal":
-                        return False
-        return True
+    # GT "goal" coverage (voxel fraction), optional reporting
+    gt_goal = int(np.sum(goal_mask))
+    gt_coverage = gt_goal / goal_mask.size if goal_mask.size else float("nan")
 
     leaves = list(absys.part.leaves.keys())
-    true_goal_uids = {u for u in leaves if box_true_goal_under_gt(absys.part.get_box(u))}
     checked_sat = set(res.sat_uids)
-    tp = len(true_goal_uids & checked_sat)
-    fn = len(true_goal_uids - checked_sat)
-    tpr = tp/len(true_goal_uids) if true_goal_uids else float("nan")
-    fnr = fn/len(true_goal_uids) if true_goal_uids else float("nan")
+
+    # Identify "truly safe" abstract states per Eq. (35)/(36):
+    # I[ psi^{-1}(xhat) ⊆ union_{xtilde in X_safe} psi^{-1}(xtilde) ]
+    # Here: X_safe = GT cells labeled 'goal'. ('fail' and 'unk' are not safe.)
+    true_safe_uids = []
+    true_safe_vol_total = 0.0
+    sat_true_safe_vol = 0.0
+    sat_true_safe_count = 0
+
+    def vol_box(b: Box3D) -> float:
+        return (b.p_hi - b.p_lo) * (b.q_hi - b.q_lo) * (b.th_hi - b.th_lo)
+
+    for u in leaves:
+        b = absys.part.get_box(u)
+        if box_true_goal_under_gt_mask(b, goal_mask):
+            true_safe_uids.append(u)
+            v = vol_box(b)
+            true_safe_vol_total += v
+            if u in checked_sat:
+                sat_true_safe_count += 1
+                sat_true_safe_vol += v
+
+    denom_count = len(true_safe_uids)
+    tpr = (sat_true_safe_count / denom_count) if denom_count > 0 else float("nan")
+
+    # Paper SR (Eq. 36): volume-weighted soft recall over truly safe abstract states
+    sr = (sat_true_safe_vol / true_safe_vol_total) if true_safe_vol_total > 0 else float("nan")
+
+    # Keep FNR too (not in the screenshot, but useful)
+    fn = denom_count - sat_true_safe_count
+    fnr = (fn / denom_count) if denom_count > 0 else float("nan")
+
+    # Optional extra diagnostics (not paper SR):
+    # total SAT coverage in the whole domain by volume
+    sat_coverage_total = compute_sat_coverage_from_boxes(res.sat_uids, absys.part)
 
     verify_cpu = time.process_time() - t1
 
@@ -185,8 +235,12 @@ def main():
         "TPR": tpr,
         "FNR": fnr,
         "SR": sr,
-        "gt_coverage": gt_coverage,
-        "sat_coverage": sat_coverage,
+        "gt_goal_voxel_coverage": gt_coverage,
+        "sat_coverage_total_volume": sat_coverage_total,
+        "true_safe_states_eq35_denom": denom_count,
+        "true_safe_volume_eq36_denom": true_safe_vol_total,
+        # "gt_coverage": gt_coverage,
+        # "sat_coverage": sat_coverage,
         "mSucc": mSucc,
         "SLP": slp,
         "cegar_iters": res.iters,
@@ -213,7 +267,7 @@ def main():
     print(f"SAT states (|Sat|): {len(res.sat_uids)}")
     print(f"TPR: {tpr:.6f}")
     print(f"FNR: {fnr:.6f}")
-    print(f"SR (coverage proportion): {sr:.6f}")
+    print(f"SR (soft recall, Eq.36): {sr:.6f}")
     print("-------------------------------------------------")
     print(f"mSucc (mean successors): {mSucc:.6f}")
     print(f"SLP (self-loop proportion): {slp:.6f}")
