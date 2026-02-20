@@ -37,12 +37,20 @@ def build(nx: int = 40, ny: int = 40, method: str = "POLY"):
         d = pts - center[None, :]
         return bool(np.all(np.sum(d * d, axis=1) <= r2))
 
-    class Spec:  # simple namespace
-        pass
+    return {
 
-    spec = Spec()
-    spec.absys = absys
-    spec.domain = domain
-    spec.phi = "A (safe U goal)"
-    spec.goal_all_fn = goal_all_fn
-    return spec
+        "absys": absys,
+        "phi": "A (safe U goal)",
+        "goal_all_fn": goal_all_fn,
+        "domain": domain,
+        "case_study": "synthetic",
+    }
+    # class Spec:  # simple namespace
+    #     pass
+    #
+    # spec = Spec()
+    # spec.absys = absys
+    # spec.domain = domain
+    # spec.phi = "A (safe U goal)"
+    # spec.goal_all_fn = goal_all_fn
+    # return spec
