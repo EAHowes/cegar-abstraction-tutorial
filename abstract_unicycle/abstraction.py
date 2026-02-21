@@ -43,17 +43,6 @@ class TransitionGraph:
 
 
 class UnicycleAbstraction:
-    """
-    Adaptive partition abstraction over Partition3D leaves.
-
-    HYBRID SUPPORT:
-      - init_method controls how initial transitions are built in rebuild_all()
-      - refine_method controls how transitions are built for NEW children after splits
-
-    Method semantics (unchanged):
-      - AABB: successor if target leaf intersects the image AABB box (theta wrap handled via img_boxes)
-      - POLY: candidate targets from AABB, then exact convex hull vs box feasibility test
-    """
     OUT_UID = -1
 
     def __init__(
@@ -166,9 +155,6 @@ class UnicycleAbstraction:
         if m == "aabb":
             succs = cand
         else:
-            # POLY: exact convex hull intersection test against candidate leaf boxes.
-            # Unwrap vertices into the minimal arc frame determined by theta_arc_start_u
-            # (matching Krish's theta handling).
             verts = np.asarray(next_verts, dtype=float).copy()
             theta_lo = -np.pi
             theta_hi = np.pi
@@ -212,13 +198,6 @@ class UnicycleAbstraction:
         self.tr.set_succ(u, succs)
 
     def refine_split(self, uid: int) -> List[int]:
-        """
-        Split the given leaf into 8 children (oct split). Returns new child uids.
-
-        HYBRID semantics:
-          - children get refine_method
-          - predecessor repair uses each predecessor's own method tag (from leaf_method)
-        """
         # Split leaf into children.
         kids = self.part.refine_oct(uid)
         if not kids:
@@ -245,7 +224,6 @@ class UnicycleAbstraction:
             self._rebuild_outgoing(k)
 
         # Incrementally update predecessors that previously pointed to uid.
-        # We do NOT recompute predecessor images; we only test intersection
         # against the 8 children using cached image information.
         preds = self.tr.predecessors(uid)
         kid_boxes = {k: self.part.get_box(k) for k in kids}

@@ -11,10 +11,6 @@ def wrap_to_pi(angle: float) -> float:
 
 
 def theta_min_arc_intervals(thetas: np.ndarray, *, eps: float = 1e-12) -> List[Tuple[float, float]]:
-    """
-    Return non-wrapping theta interval(s) in [-pi, pi] covering samples.
-    Returns either [(lo, hi)] or [(-pi, hi), (lo, pi)] if wrapping.
-    """
     th = np.asarray(thetas, dtype=float)
     if th.size == 0:
         return [(-np.pi, np.pi)]
@@ -100,11 +96,6 @@ class Node3D:
 
 
 class Partition3D:
-    """
-    Axis-aligned adaptive partition of (p,q,theta)-space with:
-      - initial UNIFORM grid via repeated axis splits at grid cuts
-      - refinement via oct-split at midpoints (8 children)
-    """
     def __init__(self, root: Box3D):
         self.nodes: Dict[int, Node3D] = {}
         self.leaves: Dict[int, Node3D] = {}

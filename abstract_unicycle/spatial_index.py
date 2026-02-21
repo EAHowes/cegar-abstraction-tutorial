@@ -10,17 +10,6 @@ from unicycle_partition_3d import Box3D
 
 @dataclass
 class SpatialHash3D:
-    """Uniform-bin spatial hash for fast candidate generation over leaf AABBs.
-
-    This is a *candidate generator only*. Queries return a superset of true
-    intersecting leaves; callers must still do exact AABB intersection checks.
-
-    The adaptive partition after splitting is non-uniform; this index remains
-    valid because it indexes by each leaf's AABB extents.
-
-    Theta is treated as non-wrapping in [th_lo, th_hi]. If theta is periodic,
-    callers should split wrapped query intervals into non-wrapping boxes.
-    """
 
     p_lo: float
     p_hi: float

@@ -79,14 +79,6 @@ def _box_true_goal_under_gt(box, *, domain, goal_arr, grid_resolution):
 
 
 def compute_fnr_against_unicycle_gt(absys, label_map, *, gt_pkl_path, domain, grid_resolution=100):
-    """
-    label_map: uid -> 'validated'/'refuted'/'unknown'
-    Prints FNR where:
-      - true positives = cells truly 'goal' under GT containment
-      - checked positives = your 'validated' cells
-      - FN = true_goal - validated
-      - FNR = |FN|/|true_goal|
-    """
     gt = pickle.load(open(gt_pkl_path, "rb"))
     goal_arr = _build_goal_array_from_gt(gt, grid_resolution)
 

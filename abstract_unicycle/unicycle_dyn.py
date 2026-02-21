@@ -83,14 +83,6 @@ class UnicycleClosedLoop:
         return bool(np.all(d <= self.p.goal_radius))
 
     def image_from_box(self, box: Box3D) -> tuple[np.ndarray, list[Box3D], bool, float]:
-        """
-        Propagate all corners one step.
-        Returns:
-          next_verts: (8,3)
-          img_boxes: list of 1 or 2 Box3D AABB images (theta may wrap)
-          hits_oob: bool
-          theta_arc_start_u: float in [0,2pi) used for unwrapping
-        """
         verts = box.corners()
         next_verts = np.array([self.step(v) for v in verts], dtype=float)
         hits_oob = self.any_corner_oob(next_verts)
@@ -102,10 +94,6 @@ class UnicycleClosedLoop:
         intervals = theta_min_arc_intervals(next_verts[:,2])
         img_boxes = [Box3D(p_lo, p_hi, q_lo, q_hi, tlo, thi) for (tlo,thi) in intervals]
 
-        # choose an arc start for unwrapping consistent with first interval
-        # Map theta to [0,2pi), and use start_u corresponding to the "start" of arc.
-        # For non-wrapping interval (lo,hi), start_u = lo+pi.
-        # For wrapping split, we treat as start at lo of the higher interval.
         first_lo = intervals[-1][0]  # if wrapping, second interval is (lo,pi)
         start_u = float((first_lo + np.pi) % (2*np.pi))
         return next_verts, img_boxes, hits_oob, start_u

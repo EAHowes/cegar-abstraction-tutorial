@@ -84,10 +84,6 @@ def extract_counterexample(
     horizon: int,
     init_set: Set[int],
 ) -> List[int]:
-    """
-    Produce one abstract counterexample path of length horizon+1 from some init uid not satisfying property.
-    Strategy: greedily choose successor that stays outside sat_{t-1} when possible.
-    """
     uid_to_i = {u:i for i,u in enumerate(uids)}
     # pick initial violating state
     start_uid = None
@@ -144,11 +140,6 @@ def validate_counterexample(
 ) -> Tuple[bool, Optional[int]]:
     """
     Concrete validation via set propagation:
-      - Start set = current cell box
-      - Propagate AABB (over corners) one step
-      - Check intersects next cell box
-    If at some step intersection is empty -> spurious, return (False, uid_to_refine)
-    If all steps intersect and we encounter unsafe (any corner) before goal -> real counterexample.
     """
     if not path:
         return (False, None)
