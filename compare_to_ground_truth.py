@@ -164,7 +164,7 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
             gt_mask[i] = _to_bool(arr[i])
 
     # --- build kripke (do NOT rebuild transitions) ---
-    _mc_checker, kripke, _kstats, uid_to_idx, idx_to_uid, _abs_cells, transition_map = absys.build_kripke()
+    _mc_checker, kripke, _kstats, uid_to_idx, idx_to_uid, _abs_cells, transition_map = absys.build_kripke(Checker=Checker)
 
     # ----------------------------------------------------------
     # Compute SAT set for phi = A(safe U goal) on the Kripke
@@ -341,7 +341,9 @@ def main():
     )
 
     # Build kripke once and reuse its transition_map (do NOT rebuild transitions)
-    _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke()
+    # _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke()
+    Checker = pick_checker(spec.get("case_study", "synthetic"))
+    _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke(Checker=Checker)
     s = self_loop_proportion_s(transition_map)
 
     mSucc = mean_successor_count_mSucc(transition_map[:-1])

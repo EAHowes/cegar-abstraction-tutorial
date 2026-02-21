@@ -158,7 +158,7 @@ class KrishAbstraction:
     # -------------------------
     # Krish Kripke build + CTL model checking (pyModelChecking totality-safe)
     # -------------------------
-    def build_kripke(self):
+    def build_kripke(self, Checker=None):
         from helpers.model_checking_tools import SyntheticModelChecker
 
         # Ensure transitions exist
@@ -200,6 +200,9 @@ class KrishAbstraction:
 
         transition_map[out_i].add(out_i)
 
-        checker = SyntheticModelChecker(self.system)
+        # checker = SyntheticModelChecker(self.system)
+        if Checker is None:
+            Checker = SyntheticModelChecker
+        checker = Checker(self.system)
         kripke, stats = checker.create_kripke(cells, transition_map)
         return checker, kripke, stats, uid_to_idx, idx_to_uid, cells, transition_map
