@@ -212,69 +212,90 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
     print("[DEBUG] |goal| =", len(goal), "|safe| =", len(safe), "|states| =", nK, "|sat| =", len(sat_kripke))
 
     # ----------------------------------------------------------
-    # Map SAT(kripke indices) -> SAT on uniform GT grid
-    # using center-point -> leaf uid -> kripke index.
+    # PAPER METRICS (Eq. 32/33) computed over ABSTRACT CELLS:
+    #
+    # TrulySafe(abs_cell) := 1[ abs_cell ⊆ union(GT safe cells) ]
+    # TPR := (# TrulySafe ∧ SAT) / (# TrulySafe)
+    # SR  := Vol(TrulySafe ∧ SAT) / Vol(GT safe union)
     # ----------------------------------------------------------
-    gt_sat = set()
-    for i, (xmin, xmax, ymin, ymax) in enumerate(cells):
-        cx = 0.5 * (xmin + xmax)
-        cy = 0.5 * (ymin + ymax)
-        uid = find_leaf_uid(absys, cx, cy)
-        if uid is None:
-            continue
+    import math
+
+    res = gt_resolution
+    dx = (d.xmax - d.xmin) / res
+    dy = (d.ymax - d.ymin) / res
+
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    # uniform_grid_cells order: k increments with i (x) outer, j (y) inner => k = i*res + j
+    def gt_safe(i: int, j: int) -> bool:
+        return bool(gt_mask[i * res + j])
+
+    def gt_cell_bounds(i: int, j: int):
+        xmin = d.xmin + i * dx
+        xmax = d.xmin + (i + 1) * dx
+        ymin = d.ymin + j * dy
+        ymax = d.ymin + (j + 1) * dy
+        return xmin, xmax, ymin, ymax
+
+    def _intersects(axmin, axmax, aymin, aymax, bxmin, bxmax, bymin, bymax) -> bool:
+        return not (
+            axmax < bxmin
+            or bxmax < axmin
+            or aymax < bymin
+            or bymax < aymin
+        )
+
+    def overlapped_gt_index_range(r):
+        ix0 = int(math.floor((r.xmin - d.xmin) / dx))
+        ix1 = int(math.floor((r.xmax - d.xmin) / dx))
+        iy0 = int(math.floor((r.ymin - d.ymin) / dy))
+        iy1 = int(math.floor((r.ymax - d.ymin) / dy))
+
+        ix0 = _clamp(ix0, 0, res - 1)
+        ix1 = _clamp(ix1, 0, res - 1)
+        iy0 = _clamp(iy0, 0, res - 1)
+        iy1 = _clamp(iy1, 0, res - 1)
+        return ix0, ix1, iy0, iy1
+
+    def is_truly_safe_abs_cell(r) -> bool:
+        ix0, ix1, iy0, iy1 = overlapped_gt_index_range(r)
+        for i in range(ix0, ix1 + 1):
+            for j in range(iy0, iy1 + 1):
+                gxmin, gxmax, gymin, gymax = gt_cell_bounds(i, j)
+                if _intersects(r.xmin, r.xmax, r.ymin, r.ymax, gxmin, gxmax, gymin, gymax):
+                    if not gt_safe(i, j):
+                        return False
+        return True
+
+    # Vol(union of GT safe cells)
+    true_safe_volume = float(np.count_nonzero(gt_mask)) * (dx * dy)
+
+    abs_truly_safe_total = 0
+    abs_true_pos = 0
+    captured_volume = 0.0
+
+    for uid, node in absys.part.leaves.items():
+        r = node.rect
+
+        truly_safe = is_truly_safe_abs_cell(r)
+        if truly_safe:
+            abs_truly_safe_total += 1
+
         ki = uid_to_idx.get(uid, None)
-        if ki is None:
-            continue
-        if ki in sat_kripke:
-            gt_sat.add(i)
+        is_sat = (ki is not None) and (ki in sat_kripke)
 
-    # ----------------------------------------------------------
-    # PAPER METRICS (uniform GT grid)
-    #
-    # Let GT_true_safe be the set of truly safe cells on the GT grid
-    # Let SAT be the set of GT-grid cells that your abstraction says satisfy phi
-    #
-    # TPR = |GT_true_safe ∩ SAT| / |GT_true_safe|
-    # FNR = 1 - TPR
-    #
-    # SR = coverage(SAT) / coverage(GT_true_safe)
-    #    = (|SAT|/N) / (|GT_true_safe|/N)
-    #    = |SAT| / |GT_true_safe|      (can be > 1)
-    # ----------------------------------------------------------
-    gt_true_safe_idxs = set(np.nonzero(gt_mask)[0].astype(int).tolist())
-    true_safe_total = len(gt_true_safe_idxs)
-    sat_total = len(gt_sat)
-    true_safe_sat = len(gt_true_safe_idxs & gt_sat)
+        if truly_safe and is_sat:
+            abs_true_pos += 1
+            captured_volume += (r.width() * r.height())
 
-    print("[DEBUG] GT true_safe_total =", true_safe_total, "GT sat_total =", sat_total, "GT true_safe_sat =", true_safe_sat)
+    print("[DEBUG] ABS truly_safe_total =", abs_truly_safe_total, "ABS true_safe_sat =", abs_true_pos)
 
-    if true_safe_total > 0:
-        tpr = true_safe_sat / true_safe_total
+    if abs_truly_safe_total > 0:
+        tpr = abs_true_pos / abs_truly_safe_total
         fnr = 1.0 - tpr
-
-        # ----------------------------------------------------------
-        # PAPER SR (Eq. 36) — volume-normalized soft recall
-        # ----------------------------------------------------------
-        
-        true_safe_volume = 0.0
-        captured_volume = 0.0
-        
-        for i, (xmin, xmax, ymin, ymax) in enumerate(cells):
-            vol = (xmax - xmin) * (ymax - ymin)
-        
-            # truly safe region
-            if gt_mask[i]:
-                true_safe_volume += vol
-        
-                # also verified safe by abstraction
-                if i in gt_sat:
-                    captured_volume += vol
-        
-        # final SR
         sr = captured_volume / true_safe_volume if true_safe_volume > 0 else 0.0
-
     else:
-        # If this happens, GT is saying nothing is truly safe for your chosen horizon/spec.
         tpr = 0.0
         fnr = 1.0
         sr = 0.0
@@ -285,7 +306,6 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
         "fnr": float(fnr),
         "coverage_proportion": float(sr),
     }, verify_time
-
 
 def self_loop_proportion_s(transition_map) -> float:
     # EXACT implementation from log_utils.py
