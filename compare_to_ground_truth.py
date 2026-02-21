@@ -11,7 +11,7 @@ from helpers.systems.synthetic import SyntheticSystem
 from helpers.model_checking_tools import (
     SyntheticModelChecker,
     MountainCarModelChecker,
-    UnicycleModelChecker,   # <-- needed because pick_checker references it
+    UnicycleModelChecker,   
 )
 from helpers.ground_truth_cache import build_gt_cache_path, load_gt_cache, save_gt_cache
 
@@ -36,9 +36,7 @@ def uniform_grid_cells(domain: Rect, resolution: int) -> np.ndarray:
     return cells
 
 
-# --------------------------------------------------
 # helper: map point -> refined leaf uid
-# --------------------------------------------------
 def find_leaf_uid(absys, x, y):
     for uid, node in absys.part.leaves.items():
         r = node.rect
@@ -47,9 +45,7 @@ def find_leaf_uid(absys, x, y):
     return None
 
 
-# --------------------------------------------------
 # build abstraction + run classification
-# --------------------------------------------------
 import importlib
 
 def run_cegar(system_mod: str, nx: int, ny: int, budget: int, method: str, max_steps: int):
@@ -81,9 +77,6 @@ def pick_checker(case_study: str):
     return SyntheticModelChecker
 
 
-# --------------------------------------------------
-# compute ground truth using Krish code
-# --------------------------------------------------
 def compute_ground_truth(absys, case_study: str, resolution: int, max_steps: int, *, cache_dir="gt_cache"):
     Checker = pick_checker(case_study)
     checker = Checker(absys.system)
@@ -106,9 +99,7 @@ def compute_ground_truth(absys, case_study: str, resolution: int, max_steps: int
     return gt_regions
 
 
-# --------------------------------------------------
 # compare classification vs ground truth
-# --------------------------------------------------
 def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
     Checker = pick_checker(spec.get("case_study", "synthetic"))
     checker = Checker(absys.system)
@@ -130,10 +121,6 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
         gt_regions,
     )
 
-    # ----------------------------------------------------------
-    # Normalize GT -> boolean mask: True means "truly safe" for the spec
-    # Krish GT often returns dict[int -> "pass"/"fail"] (or similar).
-    # ----------------------------------------------------------
     def _to_bool(v) -> bool:
         # numbers / bools
         if isinstance(v, (bool, np.bool_)):
@@ -143,10 +130,8 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
 
         s = str(v).strip().lower()
 
-        # IMPORTANT: Krish GT uses "pass"/"fail" commonly.
-        # Treat "pass" as True.
         return s in {
-            "goal", "pass", "passed", "ok", "true", "t", "1", "yes", "y",
+            "goal", "pass", "passed", 
             "safe", "sat", "satisfied"
         }
 
@@ -163,14 +148,8 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
         for i in range(len(cells)):
             gt_mask[i] = _to_bool(arr[i])
 
-    # --- build kripke (do NOT rebuild transitions) ---
     _mc_checker, kripke, _kstats, uid_to_idx, idx_to_uid, _abs_cells, transition_map = absys.build_kripke(Checker=Checker)
 
-    # ----------------------------------------------------------
-    # Compute SAT set for phi = A(safe U goal) on the Kripke
-    # using direct AU fixpoint:
-    #   Z = goal ∪ (safe ∩ AX(Z))
-    # ----------------------------------------------------------
     nK = len(transition_map)
     K_states = set(range(nK))
 
@@ -211,13 +190,6 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
     sat_kripke = Z
     print("[DEBUG] |goal| =", len(goal), "|safe| =", len(safe), "|states| =", nK, "|sat| =", len(sat_kripke))
 
-    # ----------------------------------------------------------
-    # PAPER METRICS (Eq. 32/33) computed over ABSTRACT CELLS:
-    #
-    # TrulySafe(abs_cell) := 1[ abs_cell ⊆ union(GT safe cells) ]
-    # TPR := (# TrulySafe ∧ SAT) / (# TrulySafe)
-    # SR  := Vol(TrulySafe ∧ SAT) / Vol(GT safe union)
-    # ----------------------------------------------------------
     import math
 
     res = gt_resolution
@@ -320,9 +292,6 @@ def mean_successor_count_mSucc(transition_map) -> float:
     return (sum(len(succ) for succ in transition_map) / n_states) if n_states > 0 else 0.0
 
 
-# --------------------------------------------------
-# main
-# --------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--system", type=str, default="helpers.systems.synthetic",
@@ -360,8 +329,6 @@ def main():
         args.gt_max_steps,
     )
 
-    # Build kripke once and reuse its transition_map (do NOT rebuild transitions)
-    # _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke()
     Checker = pick_checker(spec.get("case_study", "synthetic"))
     _checker, _kripke, _stats, _uid_to_idx, _idx_to_uid, _cells, transition_map = absys.build_kripke(Checker=Checker)
     s = self_loop_proportion_s(transition_map)

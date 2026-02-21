@@ -6,7 +6,6 @@ GOAL_CENTER = np.array([5.0, 5.0], dtype=float)
 GOAL_RADIUS = 2.0
 
 def cell_is_goal(rect: Rect) -> bool:
-    # Match Krish's definition: all corners within goal radius
     corners = np.array([
         [rect.xmin, rect.ymin],
         [rect.xmin, rect.ymax],

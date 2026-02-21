@@ -37,11 +37,6 @@ def _corners(absys: Abstraction, uid: int) -> np.ndarray:
 
 
 def infer_goal_all_fn(absys: Abstraction) -> GoalAllFn:
-    """Fallback goal predicate if a system doesn't provide goal_all_fn.
-
-    Heuristic: infer goal center as mean of centers of goal-labeled leaves, and
-    infer a radius from the farthest goal-corner distance (with a small epsilon).
-    """
     centers = []
     goal_corners = []
     for uid, node in absys.part.leaves.items():
@@ -79,13 +74,6 @@ def prove_cell_by_corners(
     *,
     max_steps: int = 100,
 ) -> bool:
-    """Sound(ish) sufficient proof rule used in your earlier worklist:
-
-    - simulate 4 corners for <= max_steps
-    - if ANY corner goes OOB at any time -> NOT proven
-    - if ALL corners reach goal by <= max_steps without OOB -> PROVEN (verified)
-    - else -> NOT proven
-    """
     dyn = absys.dyn_by_action["step"]
     domain = absys.part.domain
     pts = _corners(absys, uid)
@@ -112,15 +100,6 @@ def refute_cell_by_corners(
     *,
     max_steps: int = 100,
 ) -> bool:
-    """
-    Sound trivial refutation:
-
-    If ANY concrete trajectory from this cell (we use 4 corners)
-    leaves the domain within <= max_steps, then we have a real
-    counterexample → cell is REFUTED.
-
-    This is sound because it constructs an explicit bad trajectory.
-    """
     dyn = absys.dyn_by_action["step"]
     domain = absys.part.domain
     pts = _corners(absys, uid)
@@ -209,16 +188,6 @@ def classify_state_space_worklist(
     max_refine_depth: int = 12,
     verbose_every: int = 200,
 ) -> Tuple[Classification, dict]:
-    """Classify all reachable leaves into Verified / Refuted / Unknown with refinement.
-
-    Semantics:
-      - Refuted: validator finds a feasible concrete counterexample for the cell
-      - Verified: proof rule (corner simulation) proves bounded reachability to goal
-                  AND abstraction has no counterexample after refinement
-      - Unknown: everything else after budget is exhausted
-
-    We continue even after finding real counterexamples, until budget is exhausted.
-    """
     verified: Set[int] = set()
     refuted: Set[int] = set()
 

@@ -20,10 +20,10 @@ class ValidationResult:
     """
 
     feasible: bool
-    fracture_k: Optional[int]          # first k where R_k is empty (if spurious)
-    uid_path: List[int]                # finite unrolling of lasso (length <= max_steps+1)
-    reach_sets: List[Rect]             # R_0..R_{k-1} (rectangular over-approx), or full horizon if no fracture
-    x_rects: List[Optional[Rect]]      # X_0..X_T (rectangles for each uid on path, if uid is a leaf; else None)
+    fracture_k: Optional[int]          
+    uid_path: List[int]               
+    reach_sets: List[Rect]           
+    x_rects: List[Optional[Rect]]      
 
 
 @dataclass
@@ -34,11 +34,6 @@ class CEGARResult:
     last_cex: Optional[Tuple[List[int], List[int]]]  # (prefix, cycle)
 
 
-# Spot interface: extract counterexample lasso (prefix, cycle)
-
-
-# CTL interface: extract counterexample lasso (prefix, cycle) for A (safe U goal)
-
 def ctl_get_counterexample_lasso(
     absys: Abstraction,
     init_uids: Set[int],
@@ -46,12 +41,7 @@ def ctl_get_counterexample_lasso(
     **_kwargs,
 ) -> Optional[Tuple[List[int], List[int]]]:
     """Return a violating (prefix, cycle) lasso if NOT satisfied, else None.
-
-    This matches Krish's default CTL objective:
         A (safe U goal)
-
-    We use Krish's CTL model checker to decide satisfaction and a graph-based
-    witness extractor to construct a lasso when violated.
     """
     from helpers.witness_ctl import find_witness_A_safe_U_goal
 
@@ -152,18 +142,6 @@ def validate_lasso_by_set_propagation(
     goal_all_fn=None,
     ) -> ValidationResult:
     """Validate the model-checker lasso using Clarke-style reachable-set propagation.
-
-    We approximate R_k as rectangles:
-        R_0 := X_0
-        R_k := Post(R_{k-1}) ∩ X_k
-
-    Rules (as requested):
-      - If unsafe is reachable (Post(R) leaves the domain) => REAL counterexample (feasible=True) and terminate.
-      - If there exists first k with R_k empty => spurious, fracture_k=k.
-      - If no fracture up to max_steps => apply bounded-time goal proxy on corners:
-            * any corner leaves domain => REAL
-            * all corners reach goal within max_steps => spurious
-            * otherwise => REAL
 
     Returns:
       feasible=True  -> real CE
@@ -282,12 +260,7 @@ def _bounded_time_goal_proxy(
 
 
 def _infer_goal_ball(absys: Abstraction) -> Tuple[np.ndarray, float]:
-    """Infer (center, radius^2) for the bounded proxy.
-
-    We avoid hard-coding system-specific values. Heuristic:
-      - take mean center of all leaves labeled 'goal'
-      - assume radius^2 = 1.0 (matches your current ap_labeler)
-    """
+    """Infer (center, radius^2) for the bounded proxy."""
     centers: List[np.ndarray] = []
     for uid, node in absys.part.leaves.items():
         aps = absys.ap_labeler(node.rect)
@@ -311,18 +284,7 @@ def refine_clarke(
     max_refine_depth: Optional[int] = None,
     verbose: bool = False,
 ) -> int:
-    """Apply Clarke refinement for a spurious counterexample.
-
-    As requested:
-      1) ρ_split for ALL l = 1..k-1:
-         if R_l is a strict subset of X_l, isolate R_l inside X_l using breakpoint splits.
-      2) ρ_purge on the fractured transition (s_{k-1} -> s_k):
-         purge edges from the refined s_{k-1} leaf to ALL leaves that intersect X_k's rectangle.
-      3) Rebuild transitions afterward.
-
-    Returns:
-      number of isolate_subrect failures (useful for ignored_counterexamples accounting)
-    """
+    """Apply Clarke refinement for a spurious counterexample."""
     if val.fracture_k is None:
         return 0
 
@@ -433,9 +395,6 @@ def run_cegar(
             - first fracture k -> spurious
       5) If spurious -> apply ρ_split for l=1..k-1 and then ρ_purge for (k-1 -> k).
       6) Repeat.
-
-      - unsafe reachable is treated as REAL counterexample and terminates immediately.
-      - always do ρ_split on all l=1..k-1 then ρ_purge.
     """
     absys.rebuild_all_transitions()
 

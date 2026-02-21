@@ -36,7 +36,6 @@ class StepDynamics:
 
 @dataclass
 class KrishAbstraction:
-    """Adapter: Ethan CEGAR loop + Krish transitions + Krish CTL Kripke build."""
 
     part: RectPartition
     system: object
@@ -50,9 +49,6 @@ class KrishAbstraction:
         self.dyn_by_action = {"step": StepDynamics(self.system)}
         self.ap_labeler = self._ap_labeler
 
-    # -------------------------
-    # Ethan-style AP labeler used by proxies
-    # -------------------------
     def _ap_labeler(self, rect: Optional[Rect]) -> Set[str]:
         if rect is None:
             return {"unsafe"}
@@ -103,9 +99,6 @@ class KrishAbstraction:
         shim._purged = self._purged
         return Abstraction.isolate_subrect(shim, uid, target, min_w=min_w, min_h=min_h, max_depth=max_depth)
 
-    # -------------------------
-    # Krish transition builders (generalized to partitions)
-    # -------------------------
     def rebuild_all_transitions(self) -> None:
         from helpers.partitioning_generalized import (
             compute_transitions_AABB_partition,
@@ -155,9 +148,6 @@ class KrishAbstraction:
 
             self.tr.set_succ(u, "step", succ)
 
-    # -------------------------
-    # Krish Kripke build + CTL model checking (pyModelChecking totality-safe)
-    # -------------------------
     def build_kripke(self, Checker=None):
         from helpers.model_checking_tools import SyntheticModelChecker
 

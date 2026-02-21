@@ -14,7 +14,6 @@ def main():
     # Transition builder: "AABB", "POLY", or "SAMPLE"
     absys = KrishAbstraction(part=part, system=system, method="POLY")
 
-    # Kept for API compatibility; CTL objective is fixed inside Krish's checker:
     phi = "A (safe U goal)"
 
     init_uids = set(part.leaves.keys())
