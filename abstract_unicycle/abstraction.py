@@ -55,7 +55,9 @@ class UnicycleAbstraction:
         allow_self_loops: bool = True,
         tol: float = 1e-9,
         bins: Tuple[int, int, int] = (40, 32, 40),
-        # Backward-compat: allow old code to pass method=...
+        # Deprecated: old single-method call sites used method=... for both
+        # init and refine. No current call site passes this (they all use
+        # init_method/refine_method directly); kept only for compatibility.
         method: Optional[Method] = None,
     ):
         self.part = part
@@ -121,6 +123,12 @@ class UnicycleAbstraction:
     def _rebuild_outgoing(self, u: int) -> None:
         """
         Rebuild outgoing transitions for leaf u using the per-leaf method tag.
+
+        Note: the aabb/poly candidate-filtering logic below is structurally
+        mirrored (not shared) in refine_split()'s predecessor-update loop,
+        which re-tests cached image info against a fixed set of 8 child boxes
+        instead of computing a fresh image here. They're kept separate because
+        one computes from scratch while the other reuses a cache.
         """
         if u == self.OUT_UID:
             self.tr.set_succ(u, {self.OUT_UID})
@@ -223,8 +231,13 @@ class UnicycleAbstraction:
         for k in kids:
             self._rebuild_outgoing(k)
 
-        # Incrementally update predecessors that previously pointed to uid.
-        # against the 8 children using cached image information.
+        # Incrementally update predecessors that previously pointed to uid,
+        # against the 8 children, using cached image information rather than
+        # recomputing each predecessor's image from scratch. This mirrors the
+        # aabb/poly branching in _rebuild_outgoing() above, but operates on a
+        # cached image + a fixed 8-child candidate set instead of a fresh
+        # spatial-hash query; not merged with _rebuild_outgoing since the two
+        # have different inputs (compute vs. cache-lookup).
         preds = self.tr.predecessors(uid)
         kid_boxes = {k: self.part.get_box(k) for k in kids}
 
