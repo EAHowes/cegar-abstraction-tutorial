@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abstraction import Rect, RectPartition
 from cegar_loop import run_cegar
-from krish_abstraction import KrishAbstraction
+from kmeans_abstraction import KMeansAbstraction
 from helpers.systems.synthetic import SyntheticSystem
 
 def main():
@@ -12,7 +12,7 @@ def main():
     system = SyntheticSystem()
 
     # Transition builder: "AABB", "POLY", or "SAMPLE"
-    absys = KrishAbstraction(part=part, system=system, method="POLY")
+    absys = KMeansAbstraction(part=part, system=system, method="POLY")
 
     phi = "A (safe U goal)"
 

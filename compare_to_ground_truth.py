@@ -6,7 +6,7 @@ import numpy as np
 import sys
 
 from unknown_worklist import classify_state_space_worklist
-from krish_abstraction import KrishAbstraction
+from kmeans_abstraction import KMeansAbstraction
 from abstraction import Rect, RectPartition
 from helpers.systems.synthetic import SyntheticSystem
 

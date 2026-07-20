@@ -2,7 +2,7 @@
 import numpy as np
 
 from abstraction import Rect, RectPartition
-from krish_abstraction import KrishAbstraction
+from kmeans_abstraction import KMeansAbstraction
 from helpers.systems.mountain_car_impl import MountainCarSystem, P_MIN, P_MAX, V_MIN, V_MAX, GOAL_P
 
 
@@ -17,7 +17,7 @@ def build(nx: int = 20, ny: int = 20, *, method: str = "POLY"):
     # Use Krish's closed-loop system implementation (no custom wrapper)
     system = MountainCarSystem()
 
-    absys = KrishAbstraction(part=part, system=system, method=method)
+    absys = KMeansAbstraction(part=part, system=system, method=method)
 
     phi = "A (safe U goal)"
 

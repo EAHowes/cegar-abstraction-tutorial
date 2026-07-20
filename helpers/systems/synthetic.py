@@ -1,7 +1,7 @@
 import numpy as np
 
 from abstraction import Rect, RectPartition
-from krish_abstraction import KrishAbstraction
+from kmeans_abstraction import KMeansAbstraction
 
 class SyntheticSystem:
     def __init__(self):
@@ -18,7 +18,7 @@ def build(nx: int = 40, ny: int = 40, method: str = "POLY"):
     """Factory matching the interface expected by unknown_worklist.py.
 
     Returns an object with:
-      - absys: KrishAbstraction (CEGAR abstraction interface)
+      - absys: KMeansAbstraction (CEGAR abstraction interface)
       - domain: Rect
       - phi: str (CTL objective string for logging)
       - goal_all_fn(points)->bool
@@ -26,7 +26,7 @@ def build(nx: int = 40, ny: int = 40, method: str = "POLY"):
     domain = Rect(-10.0, 10.0, -10.0, 10.0)
     part = RectPartition.uniform_grid(domain, nx, ny)
     system = SyntheticSystem()
-    absys = KrishAbstraction(part=part, system=system, method=method)
+    absys = KMeansAbstraction(part=part, system=system, method=method)
 
     center = np.array([5.0, 5.0], dtype=float)
     radius = 2.0

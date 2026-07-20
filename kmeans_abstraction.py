@@ -36,7 +36,7 @@ class StepDynamics:
 
 
 @dataclass
-class KrishAbstraction:
+class KMeansAbstraction:
 
     part: RectPartition
     system: object
