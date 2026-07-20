@@ -3,9 +3,9 @@ import subprocess
 import sys
 import os
 
-COMPARE_SCRIPT = "../src/cegar/compare_to_ground_truth.py"
-UNICYCLE_SCRIPT = "../src/cegar/abstract_unicycle/run_unicycle_cegar.py"
-UNI_GT_CACHE = "../src/cegar/abstract_unicycle/cache/unicycle_cfg_e5336e8c1848.pkl"
+COMPARE_SCRIPT = "compare_to_ground_truth.py"
+UNICYCLE_SCRIPT = "abstract_unicycle/run_unicycle_cegar.py"
+UNI_GT_CACHE = "abstract_unicycle/cache/unicycle_cfg_e5336e8c1848.pkl"
 
 # synthetic / mountaincar defaults
 NX = 100
@@ -39,7 +39,7 @@ def run_general(system, method):
     ]
 
     env = os.environ.copy()
-    env["PYTHONPATH"] = "../src"
+    env["PYTHONPATH"] = "."
 
     print("\nRunning:", " ".join(cmd), "\n")
     subprocess.run(cmd, check=True, env=env)
@@ -69,8 +69,12 @@ def run_unicycle(method):
         "--gt-cache", UNI_GT_CACHE,
     ]
 
+    # No cwd= is passed to subprocess.run, so run_unicycle_cegar.py's default
+    # --outdir ("out/unicycle_cegar") resolves relative to this process's cwd
+    # (repo root) rather than abstract_unicycle/, where it lands when the
+    # script is invoked directly from inside that directory.
     env = os.environ.copy()
-    env["PYTHONPATH"] = "../src"
+    env["PYTHONPATH"] = "."
 
     print("\nRunning:", " ".join(cmd), "\n")
     subprocess.run(cmd, check=True, env=env)
