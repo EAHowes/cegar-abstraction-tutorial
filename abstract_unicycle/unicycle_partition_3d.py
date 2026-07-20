@@ -10,6 +10,10 @@ def wrap_to_pi(angle: float) -> float:
     return float((angle + np.pi) % (2 * np.pi) - np.pi)
 
 
+# Same "minimal covering arc on a circle" algorithm as
+# helpers/math_utils.py:minimal_theta_arc_intervals, but fixed to the [-pi, pi]
+# domain and without that function's extra arc_start_u return value (used by
+# unwrap_theta_interval_options for the poly transition method in abstraction.py).
 def theta_min_arc_intervals(thetas: np.ndarray, *, eps: float = 1e-12) -> List[Tuple[float, float]]:
     th = np.asarray(thetas, dtype=float)
     if th.size == 0:
