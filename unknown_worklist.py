@@ -176,6 +176,34 @@ def plot_classification(
     plt.close(fig)
 
 
+def _enqueue_newly_split_leaves(work: deque, old_leaves: Set[int], new_leaves: Set[int], out_uid: int) -> None:
+    """Push leaf uids created by a split (new_leaves - old_leaves) onto the worklist."""
+    added = new_leaves - old_leaves
+    for a in added:
+        if a != out_uid:
+            work.append(a)
+
+
+def _print_worklist_progress(
+    absys: Abstraction,
+    used_steps: int,
+    budget_steps: int,
+    verified: Set[int],
+    refuted: Set[int],
+    refine_ops: int,
+    real_cex: int,
+    ignored: int,
+) -> None:
+    unknown_now = len([x for x in absys.part.leaves.keys()
+                       if x != absys.OUT_UID and x not in verified and x not in refuted])
+    print(
+        f"[PROGRESS] steps={used_steps}/{budget_steps} "
+        f"verified={len(verified)} refuted={len(refuted)} unknown={unknown_now} "
+        f"leaves={len(absys.part.leaves)} refine_ops={refine_ops} "
+        f"real_cex={real_cex} ignored={ignored}"
+    )
+
+
 def classify_state_space_worklist(
     absys: Abstraction,
     phi: str,
@@ -272,23 +300,14 @@ def classify_state_space_worklist(
 
         # Enqueue new leaves created by splitting
         new_leaves = set(absys.part.leaves.keys())
-        added = new_leaves - old_leaves
-        for a in added:
-            if a != absys.OUT_UID:
-                work.append(a)
+        _enqueue_newly_split_leaves(work, old_leaves, new_leaves, absys.OUT_UID)
 
         # Re-check this cell later; it may now have no abstract cex, or become refutable.
         work.append(u)
 
-
         if verbose_every and (used_steps % verbose_every == 0):
-            unknown_now = len([x for x in absys.part.leaves.keys()
-                               if x != absys.OUT_UID and x not in verified and x not in refuted])
-            print(
-                f"[PROGRESS] steps={used_steps}/{budget_steps} "
-                f"verified={len(verified)} refuted={len(refuted)} unknown={unknown_now} "
-                f"leaves={len(absys.part.leaves)} refine_ops={refine_ops} "
-                f"real_cex={real_cex} ignored={ignored}"
+            _print_worklist_progress(
+                absys, used_steps, budget_steps, verified, refuted, refine_ops, real_cex, ignored
             )
 
     unknown_final = {x for x in absys.part.leaves.keys()
