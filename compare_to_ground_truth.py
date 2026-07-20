@@ -1,5 +1,7 @@
+import math
 import time
 import argparse
+import importlib
 import numpy as np
 import sys
 
@@ -11,10 +13,13 @@ from helpers.systems.synthetic import SyntheticSystem
 from helpers.model_checking_tools import (
     SyntheticModelChecker,
     MountainCarModelChecker,
-    UnicycleModelChecker,   
+    UnicycleModelChecker,
 )
 from helpers.ground_truth_cache import build_gt_cache_path, load_gt_cache, save_gt_cache
 
+# The worklist CEGAR loop and its counterexample validation recurse over the
+# refinement tree; deep grids/high budgets need more headroom than Python's
+# default 1000-frame limit.
 sys.setrecursionlimit(200_000)
 
 def uniform_grid_cells(domain: Rect, resolution: int) -> np.ndarray:
@@ -45,10 +50,7 @@ def find_leaf_uid(absys, x, y):
     return None
 
 
-# build abstraction + run classification
-import importlib
-
-def run_cegar(system_mod: str, nx: int, ny: int, budget: int, method: str, max_steps: int):
+def _run_worklist_cegar(system_mod: str, nx: int, ny: int, budget: int, method: str, max_steps: int):
     mod = importlib.import_module(system_mod)
     spec = mod.build(nx=nx, ny=ny, method=method)
 
@@ -99,6 +101,167 @@ def compute_ground_truth(absys, case_study: str, resolution: int, max_steps: int
     return gt_regions
 
 
+def _to_bool(v) -> bool:
+    """Coerce a ground-truth cell label (bool / number / status string) to bool."""
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        return float(v) != 0.0
+
+    s = str(v).strip().lower()
+    return s in {
+        "goal", "pass", "passed",
+        "safe", "sat", "satisfied"
+    }
+
+
+def _build_gt_mask(gt_reference, num_cells: int) -> np.ndarray:
+    """Convert a ground-truth reference (dict keyed by cell index, or an array-like) into
+    a boolean mask over `num_cells` uniform grid cells."""
+    gt_mask = np.zeros(num_cells, dtype=bool)
+
+    if isinstance(gt_reference, dict):
+        for i in range(num_cells):
+            gt_mask[i] = _to_bool(gt_reference.get(i, False))
+    else:
+        arr = np.asarray(gt_reference).reshape(-1)
+        if arr.size != num_cells:
+            raise ValueError(f"GT reference length {arr.size} != #cells {num_cells}")
+        for i in range(num_cells):
+            gt_mask[i] = _to_bool(arr[i])
+
+    return gt_mask
+
+
+def _kripke_labels(kripke, i: int) -> set:
+    """Read the AP labels of Kripke state `i`, tolerating the different accessor
+    conventions used across pyModelChecking versions (L()/labels/label)."""
+    if hasattr(kripke, "L") and callable(getattr(kripke, "L")):
+        return set(map(str, kripke.L(i)))
+    if hasattr(kripke, "labels"):
+        lab = getattr(kripke, "labels")
+        if callable(lab):
+            return set(map(str, lab(i)))
+        if hasattr(lab, "get"):
+            return set(map(str, lab.get(i, set())))
+    if hasattr(kripke, "label"):
+        lab = getattr(kripke, "label")
+        if callable(lab):
+            return set(map(str, lab(i)))
+        if hasattr(lab, "get"):
+            return set(map(str, lab.get(i, set())))
+    return set()
+
+
+def _backward_safe_until_goal_fixpoint(nK: int, transition_map, goal: set, safe: set) -> set:
+    """Compute Sat(A(safe U goal)) over the Kripke structure via backward fixpoint:
+    start from goal states and repeatedly add safe states all of whose successors
+    are already in the satisfying set."""
+    Z = set(goal)
+    changed = True
+    while changed:
+        changed = False
+        for s in range(nK):
+            if s in Z:
+                continue
+            if s not in safe:
+                continue
+            succ = transition_map[s]
+            if all((t in Z) for t in succ):
+                Z.add(s)
+                changed = True
+    return Z
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _intersects(axmin, axmax, aymin, aymax, bxmin, bxmax, bymin, bymax) -> bool:
+    return not (
+        axmax < bxmin
+        or bxmax < axmin
+        or aymax < bymin
+        or bymax < aymin
+    )
+
+
+class _GroundTruthGrid:
+    """Wraps a uniform `resolution` x `resolution` ground-truth grid over `domain`,
+    labeled safe/unsafe via `gt_mask`, and answers whether an abstract cell's
+    rectangle is "truly safe" (overlaps only GT-safe grid cells)."""
+
+    def __init__(self, domain: Rect, resolution: int, gt_mask: np.ndarray):
+        self.domain = domain
+        self.resolution = resolution
+        self.dx = (domain.xmax - domain.xmin) / resolution
+        self.dy = (domain.ymax - domain.ymin) / resolution
+        self.gt_mask = gt_mask
+
+    def _gt_safe(self, i: int, j: int) -> bool:
+        # uniform_grid_cells order: k increments with i (x) outer, j (y) inner => k = i*res + j
+        return bool(self.gt_mask[i * self.resolution + j])
+
+    def _cell_bounds(self, i: int, j: int):
+        d = self.domain
+        xmin = d.xmin + i * self.dx
+        xmax = d.xmin + (i + 1) * self.dx
+        ymin = d.ymin + j * self.dy
+        ymax = d.ymin + (j + 1) * self.dy
+        return xmin, xmax, ymin, ymax
+
+    def _overlapped_index_range(self, r):
+        d = self.domain
+        ix0 = int(math.floor((r.xmin - d.xmin) / self.dx))
+        ix1 = int(math.floor((r.xmax - d.xmin) / self.dx))
+        iy0 = int(math.floor((r.ymin - d.ymin) / self.dy))
+        iy1 = int(math.floor((r.ymax - d.ymin) / self.dy))
+
+        ix0 = _clamp(ix0, 0, self.resolution - 1)
+        ix1 = _clamp(ix1, 0, self.resolution - 1)
+        iy0 = _clamp(iy0, 0, self.resolution - 1)
+        iy1 = _clamp(iy1, 0, self.resolution - 1)
+        return ix0, ix1, iy0, iy1
+
+    def is_truly_safe(self, r) -> bool:
+        ix0, ix1, iy0, iy1 = self._overlapped_index_range(r)
+        for i in range(ix0, ix1 + 1):
+            for j in range(iy0, iy1 + 1):
+                gxmin, gxmax, gymin, gymax = self._cell_bounds(i, j)
+                if _intersects(r.xmin, r.xmax, r.ymin, r.ymax, gxmin, gxmax, gymin, gymax):
+                    if not self._gt_safe(i, j):
+                        return False
+        return True
+
+
+def _classify_cells_against_gt(absys, gt_grid: "_GroundTruthGrid", uid_to_idx, sat_kripke):
+    """For every abstract leaf, determine whether it's truly GT-safe and whether the
+    worklist classification (via the Kripke sat set) also marked it as safe.
+
+    Returns:
+        (abs_truly_safe_total, abs_true_pos, captured_volume)
+    """
+    abs_truly_safe_total = 0
+    abs_true_pos = 0
+    captured_volume = 0.0
+
+    for uid, node in absys.part.leaves.items():
+        r = node.rect
+
+        truly_safe = gt_grid.is_truly_safe(r)
+        if truly_safe:
+            abs_truly_safe_total += 1
+
+        ki = uid_to_idx.get(uid, None)
+        is_sat = (ki is not None) and (ki in sat_kripke)
+
+        if truly_safe and is_sat:
+            abs_true_pos += 1
+            captured_volume += (r.width() * r.height())
+
+    return abs_truly_safe_total, abs_true_pos, captured_volume
+
+
 # compare classification vs ground truth
 def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
     Checker = pick_checker(spec.get("case_study", "synthetic"))
@@ -120,148 +283,25 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
         domain_arr,
         gt_regions,
     )
-
-    def _to_bool(v) -> bool:
-        # numbers / bools
-        if isinstance(v, (bool, np.bool_)):
-            return bool(v)
-        if isinstance(v, (int, float, np.integer, np.floating)):
-            return float(v) != 0.0
-
-        s = str(v).strip().lower()
-
-        return s in {
-            "goal", "pass", "passed", 
-            "safe", "sat", "satisfied"
-        }
-
-    gt_mask = np.zeros(len(cells), dtype=bool)
-
-    if isinstance(gt_reference, dict):
-        # keys are 0..N-1 (your debug confirms ints)
-        for i in range(len(cells)):
-            gt_mask[i] = _to_bool(gt_reference.get(i, False))
-    else:
-        arr = np.asarray(gt_reference).reshape(-1)
-        if arr.size != len(cells):
-            raise ValueError(f"GT reference length {arr.size} != #cells {len(cells)}")
-        for i in range(len(cells)):
-            gt_mask[i] = _to_bool(arr[i])
+    gt_mask = _build_gt_mask(gt_reference, len(cells))
 
     _mc_checker, kripke, _kstats, uid_to_idx, idx_to_uid, _abs_cells, transition_map = absys.build_kripke(Checker=Checker)
 
     nK = len(transition_map)
     K_states = set(range(nK))
 
-    def labels_of(i: int) -> set:
-        if hasattr(kripke, "L") and callable(getattr(kripke, "L")):
-            return set(map(str, kripke.L(i)))
-        if hasattr(kripke, "labels"):
-            lab = getattr(kripke, "labels")
-            if callable(lab):
-                return set(map(str, lab(i)))
-            if hasattr(lab, "get"):
-                return set(map(str, lab.get(i, set())))
-        if hasattr(kripke, "label"):
-            lab = getattr(kripke, "label")
-            if callable(lab):
-                return set(map(str, lab(i)))
-            if hasattr(lab, "get"):
-                return set(map(str, lab.get(i, set())))
-        return set()
+    goal = {i for i in K_states if "goal" in _kripke_labels(kripke, i)}
+    safe = {i for i in K_states if "safe" in _kripke_labels(kripke, i)}
+    sat_kripke = _backward_safe_until_goal_fixpoint(nK, transition_map, goal, safe)
 
-    goal = {i for i in K_states if "goal" in labels_of(i)}
-    safe = {i for i in K_states if "safe" in labels_of(i)}
-
-    Z = set(goal)
-    changed = True
-    while changed:
-        changed = False
-        for s in range(nK):
-            if s in Z:
-                continue
-            if s not in safe:
-                continue
-            succ = transition_map[s]
-            if all((t in Z) for t in succ):
-                Z.add(s)
-                changed = True
-
-    sat_kripke = Z
-    print("[DEBUG] |goal| =", len(goal), "|safe| =", len(safe), "|states| =", nK, "|sat| =", len(sat_kripke))
-
-    import math
-
-    res = gt_resolution
-    dx = (d.xmax - d.xmin) / res
-    dy = (d.ymax - d.ymin) / res
-
-    def _clamp(v, lo, hi):
-        return max(lo, min(hi, v))
-
-    # uniform_grid_cells order: k increments with i (x) outer, j (y) inner => k = i*res + j
-    def gt_safe(i: int, j: int) -> bool:
-        return bool(gt_mask[i * res + j])
-
-    def gt_cell_bounds(i: int, j: int):
-        xmin = d.xmin + i * dx
-        xmax = d.xmin + (i + 1) * dx
-        ymin = d.ymin + j * dy
-        ymax = d.ymin + (j + 1) * dy
-        return xmin, xmax, ymin, ymax
-
-    def _intersects(axmin, axmax, aymin, aymax, bxmin, bxmax, bymin, bymax) -> bool:
-        return not (
-            axmax < bxmin
-            or bxmax < axmin
-            or aymax < bymin
-            or bymax < aymin
-        )
-
-    def overlapped_gt_index_range(r):
-        ix0 = int(math.floor((r.xmin - d.xmin) / dx))
-        ix1 = int(math.floor((r.xmax - d.xmin) / dx))
-        iy0 = int(math.floor((r.ymin - d.ymin) / dy))
-        iy1 = int(math.floor((r.ymax - d.ymin) / dy))
-
-        ix0 = _clamp(ix0, 0, res - 1)
-        ix1 = _clamp(ix1, 0, res - 1)
-        iy0 = _clamp(iy0, 0, res - 1)
-        iy1 = _clamp(iy1, 0, res - 1)
-        return ix0, ix1, iy0, iy1
-
-    def is_truly_safe_abs_cell(r) -> bool:
-        ix0, ix1, iy0, iy1 = overlapped_gt_index_range(r)
-        for i in range(ix0, ix1 + 1):
-            for j in range(iy0, iy1 + 1):
-                gxmin, gxmax, gymin, gymax = gt_cell_bounds(i, j)
-                if _intersects(r.xmin, r.xmax, r.ymin, r.ymax, gxmin, gxmax, gymin, gymax):
-                    if not gt_safe(i, j):
-                        return False
-        return True
+    gt_grid = _GroundTruthGrid(d, gt_resolution, gt_mask)
 
     # Vol(union of GT safe cells)
-    true_safe_volume = float(np.count_nonzero(gt_mask)) * (dx * dy)
+    true_safe_volume = float(np.count_nonzero(gt_mask)) * (gt_grid.dx * gt_grid.dy)
 
-    abs_truly_safe_total = 0
-    abs_true_pos = 0
-    captured_volume = 0.0
-
-    for uid, node in absys.part.leaves.items():
-        r = node.rect
-
-        truly_safe = is_truly_safe_abs_cell(r)
-        if truly_safe:
-            abs_truly_safe_total += 1
-
-        ki = uid_to_idx.get(uid, None)
-        is_sat = (ki is not None) and (ki in sat_kripke)
-
-        if truly_safe and is_sat:
-            abs_true_pos += 1
-            captured_volume += (r.width() * r.height())
-
-    print("[DEBUG] ABS truly_safe_total =", abs_truly_safe_total, "ABS true_safe_sat =", abs_true_pos)
+    abs_truly_safe_total, abs_true_pos, captured_volume = _classify_cells_against_gt(
+        absys, gt_grid, uid_to_idx, sat_kripke
+    )
 
     if abs_truly_safe_total > 0:
         tpr = abs_true_pos / abs_truly_safe_total
@@ -280,7 +320,7 @@ def evaluate(absys, cls, spec, gt_resolution, gt_max_steps):
     }, verify_time
 
 def self_loop_proportion_s(transition_map) -> float:
-    # EXACT implementation from log_utils.py
+    """Fraction of Kripke states that have a self-loop transition."""
     self_loops = sum(1 for i, succ in enumerate(transition_map) if i in succ)
     n_states = len(transition_map)
     return self_loops / n_states if n_states > 0 else 0.0
@@ -307,7 +347,7 @@ def main():
     args = parser.parse_args()
 
     print("\n[RUNNING CEGAR BUILD]")
-    absys, cls, build_time, stats, spec = run_cegar(
+    absys, cls, build_time, stats, spec = _run_worklist_cegar(
         args.system,
         args.nx,
         args.ny,

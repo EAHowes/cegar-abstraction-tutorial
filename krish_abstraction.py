@@ -9,7 +9,8 @@ from abstraction import Rect, RectPartition, TransitionRelation, Abstraction
 
 
 class StepDynamics:
-    """Provides the interface Ethan's validator expects."""
+    """Adapter exposing the dynamics()/image_bbox() interface that cegar_loop's
+    lasso validator (validate_lasso_by_set_propagation) expects."""
     def __init__(self, system):
         self.system = system
 
@@ -53,7 +54,13 @@ class KrishAbstraction:
         if rect is None:
             return {"unsafe"}
 
-        # Default to Krish parameters (5,5), r=2
+        # Generic fallback goal region shared across case studies unless a
+        # subclass/config overrides ap_labeler. This matches the synthetic case
+        # study's goal exactly (see helpers/systems/synthetic.py), but note it is
+        # NOT overridden by mountain_car.build() -- mountaincar's Kripke-level
+        # "goal" AP label (used for CTL model checking) therefore uses this
+        # synthetic-specific region rather than mountaincar's own goal condition
+        # (which is applied separately via goal_all_fn for corner proving/refutation).
         center = np.array([5.0, 5.0], dtype=float)
         radius = 2.0
         r2 = radius * radius
@@ -190,7 +197,6 @@ class KrishAbstraction:
 
         transition_map[out_i].add(out_i)
 
-        # checker = SyntheticModelChecker(self.system)
         if Checker is None:
             Checker = SyntheticModelChecker
         checker = Checker(self.system)
