@@ -20,10 +20,10 @@ class ValidationResult:
     """
 
     feasible: bool
-    fracture_k: Optional[int]          
-    uid_path: List[int]               
-    reach_sets: List[Rect]           
-    x_rects: List[Optional[Rect]]      
+    fracture_k: Optional[int]      # index into uid_path where propagation first left the claimed cell; None if no fracture
+    uid_path: List[int]            # the expanded (prefix + cycle) sequence of leaf uids from the lasso
+    reach_sets: List[Rect]         # R_0..R_k: the propagated reachable-set rectangles up to the fracture (or full path)
+    x_rects: List[Optional[Rect]]  # X_i rectangles for each uid in uid_path, snapshotted at validation time (None for OUT/non-leaf)
 
 
 @dataclass
