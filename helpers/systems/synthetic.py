@@ -18,7 +18,7 @@ def build(nx: int = 40, ny: int = 40, method: str = "POLY"):
     """Factory matching the interface expected by unknown_worklist.py.
 
     Returns an object with:
-      - absys: KrishAbstraction (Ethan CEGAR interface)
+      - absys: KrishAbstraction (CEGAR abstraction interface)
       - domain: Rect
       - phi: str (CTL objective string for logging)
       - goal_all_fn(points)->bool
@@ -38,19 +38,9 @@ def build(nx: int = 40, ny: int = 40, method: str = "POLY"):
         return bool(np.all(np.sum(d * d, axis=1) <= r2))
 
     return {
-
         "absys": absys,
         "phi": "A (safe U goal)",
         "goal_all_fn": goal_all_fn,
         "domain": domain,
         "case_study": "synthetic",
     }
-    # class Spec:  # simple namespace
-    #     pass
-    #
-    # spec = Spec()
-    # spec.absys = absys
-    # spec.domain = domain
-    # spec.phi = "A (safe U goal)"
-    # spec.goal_all_fn = goal_all_fn
-    # return spec
