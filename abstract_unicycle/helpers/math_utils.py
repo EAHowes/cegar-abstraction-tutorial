@@ -33,6 +33,12 @@ def minimal_theta_arc_intervals(values, theta_lo, theta_hi, eps=1e-12):
     """
     Return minimal non-wrapping interval(s) in [theta_lo, theta_hi] for theta samples.
 
+    Same "minimal covering arc on a circle" algorithm as
+    unicycle_partition_3d.py:theta_min_arc_intervals, generalized to an
+    arbitrary [theta_lo, theta_hi] domain and also returning arc_start_u,
+    which unwrap_theta_interval_options (below) needs for the poly transition
+    method in abstraction.py.
+
     Returns:
         intervals: list[(interval_lo, interval_hi)] with interval_lo <= interval_hi
         arc_start_u: arc start in wrapped coordinates [0, period)
