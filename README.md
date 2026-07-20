@@ -4,8 +4,8 @@ A worklist-based CEGAR (Counterexample-Guided Abstraction Refinement) tool for f
 
 ## Repo layout
 
-- Root — 2D case studies (synthetic, mountain car): `abstraction.py`, `cegar_loop.py`, `krish_abstraction.py`, `compare_to_ground_truth.py`, `helpers/`.
-- `abstract_unicycle/` — an independent 3D code path for the unicycle case study, with its own `abstraction.py`, `cegar.py`, and vendored `helpers/`.
+- Root: 2D case studies (synthetic, mountain car): `abstraction.py`, `cegar_loop.py`, `kmeans_abstraction.py`, `compare_to_ground_truth.py`, `helpers/`.
+- `abstract_unicycle/`: an independent 3D code path for the unicycle case study, with its own `abstraction.py`, `cegar.py`, and vendored `helpers/`.
 
 ## Setup
 
@@ -48,7 +48,7 @@ python run_unicycle_cegar.py --init-method aabb --refine-method aabb \
 
 ## Simple demo
 
-`main.py` is a minimal, argument-free test (synthetic system + `KrishAbstraction`):
+`main.py` is a minimal, argument-free test (synthetic system + `KMeansAbstraction`):
 
 ```bash
 python main.py
