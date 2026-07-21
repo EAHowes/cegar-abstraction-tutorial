@@ -1,3 +1,6 @@
+![CEGAR False Negative Map via AABB](/images/false_negative_map_aabb.png)
+> CEGAR False Negative Visualization via AABB
+
 # cegar-abstraction-tutorial
 
 A worklist-based CEGAR (Counterexample-Guided Abstraction Refinement) tool for formal verification. It abstracts a continuous state space into a partition (rectangles or polytopes), builds transitions between cells, checks a CTL-style spec, and refines cells found to be "unknown" until the classification converges. Three case studies are included: **synthetic**, **mountain car**, and a 3D **unicycle** model.
