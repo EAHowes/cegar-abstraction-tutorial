@@ -1,6 +1,5 @@
-| Cegar False Negative Map via AABB | Grid Abstraction Trajectories Visualized |
-| :---: | :---: |
-| ![Synthetic False Negative Map AABB](/images/false_negative_map_aabb.png) | ![Synthetic Abstraction Visualization](/images/grid_abstraction.png) |
+![Synthetic False Negative Map AABB](/images/false_negative_map_aabb.png)
+> Synthetic False Negative Map AABB
 
 # cegar-abstraction-tutorial
 
